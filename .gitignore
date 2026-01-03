@@ -55,3 +55,4 @@ Thumbs.db
 # Project specific
 *.duckdb
 *.duckdb.wal
+DESIGN.md
