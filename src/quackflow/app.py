@@ -95,6 +95,10 @@ class Quackflow:
         return config
 
     def compile(self) -> DAG:
+        for config in self.outputs:
+            if config.trigger_interval is None and config.trigger_records is None:
+                raise ValueError("All outputs must have a trigger (interval or records)")
+
         dag = DAG()
 
         for name, config in self.sources.items():

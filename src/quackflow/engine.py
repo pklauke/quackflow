@@ -12,6 +12,9 @@ class Engine:
         ddl = schema.create_table_ddl(name)
         self._conn.execute(ddl)
 
+    def create_view(self, name: str, sql: str) -> None:
+        self._conn.execute(f"CREATE VIEW {name} AS {sql}")
+
     def insert(self, table_name: str, batch: pa.RecordBatch) -> None:
         self._conn.execute(f"INSERT INTO {table_name} SELECT * FROM batch")
 

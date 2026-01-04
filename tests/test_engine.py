@@ -34,14 +34,16 @@ class TestEngineInsert:
     def test_insert_record_batch(self):
         engine = Engine()
         engine.create_table("events", EventSchema)
-        batch = pa.RecordBatch.from_pydict({
-            "id": [1, 2],
-            "user_id": ["alice", "bob"],
-            "event_time": [
-                dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
-                dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc),
-            ],
-        })
+        batch = pa.RecordBatch.from_pydict(
+            {
+                "id": [1, 2],
+                "user_id": ["alice", "bob"],
+                "event_time": [
+                    dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+                    dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc),
+                ],
+            }
+        )
 
         engine.insert("events", batch)
 
@@ -51,16 +53,20 @@ class TestEngineInsert:
     def test_insert_multiple_batches(self):
         engine = Engine()
         engine.create_table("events", EventSchema)
-        batch1 = pa.RecordBatch.from_pydict({
-            "id": [1],
-            "user_id": ["alice"],
-            "event_time": [dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc)],
-        })
-        batch2 = pa.RecordBatch.from_pydict({
-            "id": [2],
-            "user_id": ["bob"],
-            "event_time": [dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc)],
-        })
+        batch1 = pa.RecordBatch.from_pydict(
+            {
+                "id": [1],
+                "user_id": ["alice"],
+                "event_time": [dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc)],
+            }
+        )
+        batch2 = pa.RecordBatch.from_pydict(
+            {
+                "id": [2],
+                "user_id": ["bob"],
+                "event_time": [dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc)],
+            }
+        )
 
         engine.insert("events", batch1)
         engine.insert("events", batch2)
@@ -73,15 +79,17 @@ class TestEngineQuery:
     def test_query_returns_record_batch(self):
         engine = Engine()
         engine.create_table("events", EventSchema)
-        batch = pa.RecordBatch.from_pydict({
-            "id": [1, 2, 3],
-            "user_id": ["alice", "bob", "alice"],
-            "event_time": [
-                dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
-                dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc),
-                dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.timezone.utc),
-            ],
-        })
+        batch = pa.RecordBatch.from_pydict(
+            {
+                "id": [1, 2, 3],
+                "user_id": ["alice", "bob", "alice"],
+                "event_time": [
+                    dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+                    dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc),
+                    dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.timezone.utc),
+                ],
+            }
+        )
         engine.insert("events", batch)
 
         result = engine.query("SELECT * FROM events WHERE user_id = 'alice'")
@@ -92,15 +100,17 @@ class TestEngineQuery:
     def test_query_with_aggregation(self):
         engine = Engine()
         engine.create_table("events", EventSchema)
-        batch = pa.RecordBatch.from_pydict({
-            "id": [1, 2, 3],
-            "user_id": ["alice", "bob", "alice"],
-            "event_time": [
-                dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
-                dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc),
-                dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.timezone.utc),
-            ],
-        })
+        batch = pa.RecordBatch.from_pydict(
+            {
+                "id": [1, 2, 3],
+                "user_id": ["alice", "bob", "alice"],
+                "event_time": [
+                    dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+                    dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc),
+                    dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.timezone.utc),
+                ],
+            }
+        )
         engine.insert("events", batch)
 
         result = engine.query("SELECT user_id, COUNT(*) as cnt FROM events GROUP BY user_id ORDER BY user_id")

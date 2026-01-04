@@ -118,7 +118,9 @@ class TestQuackflowDAG:
         sink = FakeSink()
         app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
         app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
-        app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"])
+        app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"]).trigger(
+            records=1
+        )
 
         dag = app.compile()
 
@@ -131,7 +133,9 @@ class TestQuackflowDAG:
         sink = FakeSink()
         app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
         app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
-        app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"])
+        app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"]).trigger(
+            records=1
+        )
 
         dag = app.compile()
 
@@ -148,8 +152,8 @@ class TestQuackflowDAG:
         sink1 = FakeSink()
         sink2 = FakeSink()
         app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
-        app.output(sink1, "SELECT * FROM events", schema=EventSchema, depends_on=["events"])
-        app.output(sink2, "SELECT * FROM events", schema=EventSchema, depends_on=["events"])
+        app.output(sink1, "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=1)
+        app.output(sink2, "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=1)
 
         dag = app.compile()
 
@@ -174,7 +178,7 @@ class TestQuackflowDAG:
             "SELECT * FROM events JOIN users ON events.user_id = users.user_id",
             depends_on=["events", "users"],
         )
-        app.output(sink, "SELECT * FROM joined", schema=EventSchema, depends_on=["joined"])
+        app.output(sink, "SELECT * FROM joined", schema=EventSchema, depends_on=["joined"]).trigger(records=1)
 
         dag = app.compile()
 
