@@ -70,7 +70,7 @@ class TestSourceProtocol:
         batch = pa.RecordBatch.from_pydict(
             {
                 "id": [1],
-                "timestamp": [dt.datetime(2024, 1, 1, tzinfo=dt.UTC)],
+                "timestamp": [dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)],
             }
         )
         source = FakeSource(batch, EventTimeNotion(column="timestamp"))
@@ -83,8 +83,8 @@ class TestSourceProtocol:
             {
                 "id": [1, 2],
                 "timestamp": [
-                    dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.UTC),
-                    dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.UTC),
+                    dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+                    dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc),
                 ],
             }
         )
@@ -103,7 +103,7 @@ class TestSourceProtocol:
         batch = pa.RecordBatch.from_pydict(
             {
                 "id": [1],
-                "timestamp": [dt.datetime(2024, 1, 1, tzinfo=dt.UTC)],
+                "timestamp": [dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)],
             }
         )
         source = FakeSource(batch, EventTimeNotion(column="timestamp"))
@@ -120,8 +120,8 @@ class TestSourceProtocol:
             {
                 "id": [1, 2],
                 "timestamp": [
-                    dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.UTC),
-                    dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.UTC),
+                    dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+                    dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.timezone.utc),
                 ],
             }
         )
@@ -131,7 +131,7 @@ class TestSourceProtocol:
         await source.start()
         await source.read()
 
-        assert source.watermark == dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.UTC)
+        assert source.watermark == dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.timezone.utc)
 
 
 class TestReplayableSourceProtocol:
@@ -139,7 +139,7 @@ class TestReplayableSourceProtocol:
         batch = pa.RecordBatch.from_pydict(
             {
                 "id": [1],
-                "timestamp": [dt.datetime(2024, 1, 1, tzinfo=dt.UTC)],
+                "timestamp": [dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc)],
             }
         )
         source = FakeReplayableSource(batch, EventTimeNotion(column="timestamp"))
@@ -152,16 +152,16 @@ class TestReplayableSourceProtocol:
             {
                 "id": [1, 2, 3],
                 "timestamp": [
-                    dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.UTC),
-                    dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.UTC),
-                    dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.UTC),
+                    dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+                    dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc),
+                    dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.timezone.utc),
                 ],
             }
         )
         source = FakeReplayableSource(batch, EventTimeNotion(column="timestamp"))
 
         await source.start()
-        await source.seek(dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.UTC))
+        await source.seek(dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc))
         result = await source.read()
 
         assert result.to_pydict()["id"] == [2, 3]
