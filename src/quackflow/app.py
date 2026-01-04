@@ -1,5 +1,4 @@
 import datetime as dt
-import re
 import typing
 
 from quackflow.schema import Schema
@@ -16,17 +15,19 @@ class SourceConfig:
 
 
 class ViewConfig:
-    def __init__(self, name: str, sql: str, materialize: bool = False):
+    def __init__(self, name: str, sql: str, depends_on: list[str], materialize: bool = False):
         self.name = name
         self.sql = sql
+        self.depends_on = depends_on
         self.materialize = materialize
 
 
 class OutputConfig:
-    def __init__(self, sink: typing.Any, sql: str, schema: type[Schema]):
+    def __init__(self, sink: typing.Any, sql: str, schema: type[Schema], depends_on: list[str]):
         self.sink = sink
         self.sql = sql
         self.schema = schema
+        self.depends_on = depends_on
         self.trigger_interval: dt.timedelta | None = None
         self.trigger_records: int | None = None
 
@@ -78,8 +79,8 @@ class Quackflow:
     ) -> None:
         self.sources[name] = SourceConfig(name, source, schema, time_notion)
 
-    def view(self, name: str, sql: str, *, materialize: bool = False) -> None:
-        self.views[name] = ViewConfig(name, sql, materialize)
+    def view(self, name: str, sql: str, *, depends_on: list[str], materialize: bool = False) -> None:
+        self.views[name] = ViewConfig(name, sql, depends_on, materialize)
 
     def output(
         self,
@@ -87,8 +88,9 @@ class Quackflow:
         sql: str,
         *,
         schema: type[Schema],
+        depends_on: list[str],
     ) -> OutputConfig:
-        config = OutputConfig(sink, sql, schema)
+        config = OutputConfig(sink, sql, schema, depends_on)
         self.outputs.append(config)
         return config
 
@@ -103,25 +105,18 @@ class Quackflow:
             step = Step(name, "view", config)
             dag.add_step(step)
 
-            for dep_name in self._extract_table_references(config.sql):
-                if dep_name in dag._steps_by_name:
-                    upstream_step = dag.get_step(dep_name)
-                    step.upstream.append(upstream_step)
-                    upstream_step.downstream.append(step)
+            for dep_name in config.depends_on:
+                upstream_step = dag.get_step(dep_name)
+                step.upstream.append(upstream_step)
+                upstream_step.downstream.append(step)
 
         for i, config in enumerate(self.outputs):
             step = Step(f"output_{i}", "output", config)
             dag.add_step(step)
 
-            for dep_name in self._extract_table_references(config.sql):
-                if dep_name in dag._steps_by_name:
-                    upstream_step = dag.get_step(dep_name)
-                    step.upstream.append(upstream_step)
-                    upstream_step.downstream.append(step)
+            for dep_name in config.depends_on:
+                upstream_step = dag.get_step(dep_name)
+                step.upstream.append(upstream_step)
+                upstream_step.downstream.append(step)
 
         return dag
-
-    def _extract_table_references(self, sql: str) -> list[str]:
-        pattern = r'\b(?:FROM|JOIN)\s+([a-zA-Z_][a-zA-Z0-9_]*)'
-        matches = re.findall(pattern, sql, re.IGNORECASE)
-        return matches

@@ -19,8 +19,6 @@ class OutputSchema(Schema):
 
 
 class FakeSource:
-    """Minimal fake source for testing."""
-
     def __init__(self):
         self._watermark: dt.datetime | None = None
 
@@ -39,8 +37,6 @@ class FakeSource:
 
 
 class FakeSink:
-    """Minimal fake sink for testing."""
-
     def __init__(self):
         self.written: list[pa.RecordBatch] = []
 
@@ -62,7 +58,7 @@ class TestQuackflowRegistration:
         source = FakeSource()
         app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
 
-        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id")
+        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
 
         assert "user_counts" in app.views
 
@@ -71,9 +67,9 @@ class TestQuackflowRegistration:
         source = FakeSource()
         sink = FakeSink()
         app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
-        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id")
+        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
 
-        app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema)
+        app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"])
 
         assert len(app.outputs) == 1
 
@@ -85,7 +81,9 @@ class TestQuackflowTrigger:
         sink = FakeSink()
         app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
 
-        app.output(sink, "SELECT * FROM events", schema=EventSchema).trigger(interval=dt.timedelta(minutes=5))
+        app.output(sink, "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(
+            interval=dt.timedelta(minutes=5)
+        )
 
         assert app.outputs[0].trigger_interval == dt.timedelta(minutes=5)
 
@@ -95,7 +93,7 @@ class TestQuackflowTrigger:
         sink = FakeSink()
         app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
 
-        app.output(sink, "SELECT * FROM events", schema=EventSchema).trigger(records=100)
+        app.output(sink, "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=100)
 
         assert app.outputs[0].trigger_records == 100
 
@@ -105,7 +103,7 @@ class TestQuackflowTrigger:
         sink = FakeSink()
         app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
 
-        app.output(sink, "SELECT * FROM events", schema=EventSchema).trigger(
+        app.output(sink, "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(
             interval=dt.timedelta(minutes=1), records=10000
         )
 
@@ -119,25 +117,24 @@ class TestQuackflowDAG:
         source = FakeSource()
         sink = FakeSink()
         app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
-        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id")
-        app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema)
+        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
+        app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"])
 
         dag = app.compile()
 
         assert dag is not None
-        assert len(dag.steps) == 3  # source, view, output
+        assert len(dag.steps) == 3
 
     def test_dag_has_correct_dependencies(self):
         app = Quackflow()
         source = FakeSource()
         sink = FakeSink()
         app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
-        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id")
-        app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema)
+        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
+        app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"])
 
         dag = app.compile()
 
-        # Output depends on view, view depends on source
         output_step = dag.get_step("output_0")
         view_step = dag.get_step("user_counts")
         source_step = dag.get_step("events")
@@ -151,8 +148,8 @@ class TestQuackflowDAG:
         sink1 = FakeSink()
         sink2 = FakeSink()
         app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
-        app.output(sink1, "SELECT * FROM events", schema=EventSchema)
-        app.output(sink2, "SELECT * FROM events", schema=EventSchema)
+        app.output(sink1, "SELECT * FROM events", schema=EventSchema, depends_on=["events"])
+        app.output(sink2, "SELECT * FROM events", schema=EventSchema, depends_on=["events"])
 
         dag = app.compile()
 
@@ -172,8 +169,12 @@ class TestQuackflowDAG:
         sink = FakeSink()
         app.source("events", source1, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
         app.source("users", source2, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
-        app.view("joined", "SELECT * FROM events JOIN users ON events.user_id = users.user_id")
-        app.output(sink, "SELECT * FROM joined", schema=EventSchema)
+        app.view(
+            "joined",
+            "SELECT * FROM events JOIN users ON events.user_id = users.user_id",
+            depends_on=["events", "users"],
+        )
+        app.output(sink, "SELECT * FROM joined", schema=EventSchema, depends_on=["joined"])
 
         dag = app.compile()
 
