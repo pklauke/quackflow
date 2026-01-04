@@ -3,15 +3,13 @@ import typing
 
 from quackflow.schema import Schema
 from quackflow.source import Source
-from quackflow.time_notion import TimeNotion
 
 
 class SourceConfig:
-    def __init__(self, name: str, source: Source, schema: type[Schema], time_notion: TimeNotion):
+    def __init__(self, name: str, source: Source, schema: type[Schema]):
         self.name = name
         self.source = source
         self.schema = schema
-        self.time_notion = time_notion
 
 
 class ViewConfig:
@@ -22,21 +20,30 @@ class ViewConfig:
         self.materialize = materialize
 
 
+SECONDS_PER_DAY = 86400
+
+
 class OutputConfig:
     def __init__(self, sink: typing.Any, sql: str, schema: type[Schema], depends_on: list[str]):
         self.sink = sink
         self.sql = sql
         self.schema = schema
         self.depends_on = depends_on
-        self.trigger_interval: dt.timedelta | None = None
+        self.trigger_window: dt.timedelta | None = None
         self.trigger_records: int | None = None
 
     def trigger(
         self,
-        interval: dt.timedelta | None = None,
+        window: dt.timedelta | None = None,
         records: int | None = None,
     ) -> "OutputConfig":
-        self.trigger_interval = interval
+        if window is not None:
+            window_seconds = int(window.total_seconds())
+            if window_seconds <= 0:
+                raise ValueError("Window must be positive")
+            if SECONDS_PER_DAY % window_seconds != 0:
+                raise ValueError(f"Window must divide evenly into a day (86400 seconds), got {window_seconds}s")
+        self.trigger_window = window
         self.trigger_records = records
         return self
 
@@ -75,9 +82,8 @@ class Quackflow:
         source: Source,
         *,
         schema: type[Schema],
-        time_notion: TimeNotion,
     ) -> None:
-        self.sources[name] = SourceConfig(name, source, schema, time_notion)
+        self.sources[name] = SourceConfig(name, source, schema)
 
     def view(self, name: str, sql: str, *, depends_on: list[str], materialize: bool = False) -> None:
         self.views[name] = ViewConfig(name, sql, depends_on, materialize)
@@ -96,8 +102,8 @@ class Quackflow:
 
     def compile(self) -> DAG:
         for config in self.outputs:
-            if config.trigger_interval is None and config.trigger_records is None:
-                raise ValueError("All outputs must have a trigger (interval or records)")
+            if config.trigger_window is None and config.trigger_records is None:
+                raise ValueError("All outputs must have a trigger (window or records)")
 
         dag = DAG()
 

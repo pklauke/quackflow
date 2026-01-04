@@ -1,10 +1,10 @@
 import datetime as dt
 
 import pyarrow as pa
+import pytest
 
 from quackflow.app import Quackflow
 from quackflow.schema import Int, Schema, String, Timestamp
-from quackflow.time_notion import EventTimeNotion
 
 
 class EventSchema(Schema):
@@ -49,14 +49,14 @@ class TestQuackflowRegistration:
         app = Quackflow()
         source = FakeSource()
 
-        app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
+        app.source("events", source, schema=EventSchema)
 
         assert "events" in app.sources
 
     def test_register_view(self):
         app = Quackflow()
         source = FakeSource()
-        app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
+        app.source("events", source, schema=EventSchema)
 
         app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
 
@@ -66,7 +66,7 @@ class TestQuackflowRegistration:
         app = Quackflow()
         source = FakeSource()
         sink = FakeSink()
-        app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
+        app.source("events", source, schema=EventSchema)
         app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
 
         app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"])
@@ -75,23 +75,23 @@ class TestQuackflowRegistration:
 
 
 class TestQuackflowTrigger:
-    def test_output_with_interval_trigger(self):
+    def test_output_with_window_trigger(self):
         app = Quackflow()
         source = FakeSource()
         sink = FakeSink()
-        app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
+        app.source("events", source, schema=EventSchema)
 
         app.output(sink, "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(
-            interval=dt.timedelta(minutes=5)
+            window=dt.timedelta(minutes=5)
         )
 
-        assert app.outputs[0].trigger_interval == dt.timedelta(minutes=5)
+        assert app.outputs[0].trigger_window == dt.timedelta(minutes=5)
 
     def test_output_with_records_trigger(self):
         app = Quackflow()
         source = FakeSource()
         sink = FakeSink()
-        app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
+        app.source("events", source, schema=EventSchema)
 
         app.output(sink, "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=100)
 
@@ -101,14 +101,25 @@ class TestQuackflowTrigger:
         app = Quackflow()
         source = FakeSource()
         sink = FakeSink()
-        app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
+        app.source("events", source, schema=EventSchema)
 
         app.output(sink, "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(
-            interval=dt.timedelta(minutes=1), records=10000
+            window=dt.timedelta(minutes=1), records=10000
         )
 
-        assert app.outputs[0].trigger_interval == dt.timedelta(minutes=1)
+        assert app.outputs[0].trigger_window == dt.timedelta(minutes=1)
         assert app.outputs[0].trigger_records == 10000
+
+    def test_window_must_divide_day_evenly(self):
+        app = Quackflow()
+        source = FakeSource()
+        sink = FakeSink()
+        app.source("events", source, schema=EventSchema)
+
+        with pytest.raises(ValueError, match="divide evenly"):
+            app.output(sink, "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(
+                window=dt.timedelta(seconds=7)
+            )
 
 
 class TestQuackflowDAG:
@@ -116,7 +127,7 @@ class TestQuackflowDAG:
         app = Quackflow()
         source = FakeSource()
         sink = FakeSink()
-        app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
+        app.source("events", source, schema=EventSchema)
         app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
         app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"]).trigger(
             records=1
@@ -131,7 +142,7 @@ class TestQuackflowDAG:
         app = Quackflow()
         source = FakeSource()
         sink = FakeSink()
-        app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
+        app.source("events", source, schema=EventSchema)
         app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
         app.output(sink, "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"]).trigger(
             records=1
@@ -151,7 +162,7 @@ class TestQuackflowDAG:
         source = FakeSource()
         sink1 = FakeSink()
         sink2 = FakeSink()
-        app.source("events", source, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
+        app.source("events", source, schema=EventSchema)
         app.output(sink1, "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=1)
         app.output(sink2, "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=1)
 
@@ -171,8 +182,8 @@ class TestQuackflowDAG:
         source1 = FakeSource()
         source2 = FakeSource()
         sink = FakeSink()
-        app.source("events", source1, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
-        app.source("users", source2, schema=EventSchema, time_notion=EventTimeNotion(column="event_time"))
+        app.source("events", source1, schema=EventSchema)
+        app.source("users", source2, schema=EventSchema)
         app.view(
             "joined",
             "SELECT * FROM events JOIN users ON events.user_id = users.user_id",

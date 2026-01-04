@@ -32,6 +32,7 @@ kafka = [
 dev = [
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
+    "pytest-timeout>=2.3.0",
     "ruff>=0.8.0",
     "pyright>=1.1.390",
 ]
@@ -68,3 +69,4 @@ venv = ".venv"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+timeout = 5
