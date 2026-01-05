@@ -6,6 +6,7 @@ import pytest
 from quackflow.app import Quackflow
 from quackflow.runtime import Runtime
 from quackflow.schema import Int, Schema, String, Timestamp
+from quackflow.testing import FakeSink, FakeSource
 from quackflow.time_notion import EventTimeNotion
 
 
@@ -13,45 +14,6 @@ class EventSchema(Schema):
     id = Int()
     user_id = String()
     event_time = Timestamp()
-
-
-class FakeSource:
-    def __init__(self, batches: list[pa.RecordBatch], time_notion: EventTimeNotion):
-        self._batches = batches
-        self._time_notion = time_notion
-        self._index = 0
-        self._watermark: dt.datetime | None = None
-
-    @property
-    def watermark(self) -> dt.datetime | None:
-        return self._watermark
-
-    async def start(self) -> None:
-        pass
-
-    async def seek(self, timestamp: dt.datetime) -> None:
-        pass
-
-    async def read(self) -> pa.RecordBatch:
-        if self._index >= len(self._batches):
-            schema = self._batches[0].schema if self._batches else None
-            return pa.RecordBatch.from_pydict({"id": [], "user_id": [], "event_time": []}, schema=schema)
-        batch = self._batches[self._index]
-        self._index += 1
-        if batch.num_rows > 0:
-            self._watermark = self._time_notion.compute_watermark(batch)
-        return batch
-
-    async def stop(self) -> None:
-        pass
-
-
-class FakeSink:
-    def __init__(self):
-        self.batches: list[pa.RecordBatch] = []
-
-    async def write(self, batch: pa.RecordBatch) -> None:
-        self.batches.append(batch)
 
 
 def make_batch(ids: list[int], users: list[str], times: list[dt.datetime]) -> pa.RecordBatch:

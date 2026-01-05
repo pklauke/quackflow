@@ -6,6 +6,7 @@ import pytest
 from quackflow.app import Quackflow
 from quackflow.runtime import Runtime
 from quackflow.schema import Float, Int, Schema, String, Timestamp
+from quackflow.testing import FakeSink, FakeSource
 from quackflow.time_notion import EventTimeNotion
 
 
@@ -23,53 +24,6 @@ class LocationAggSchema(Schema):
     country = String()
     location_bucket = Int()
     total_users = Int()
-
-
-class FakeSource:
-    def __init__(self, batches: list[pa.RecordBatch], time_notion: EventTimeNotion):
-        self._batches = batches
-        self._time_notion = time_notion
-        self._index = 0
-        self._watermark: dt.datetime | None = None
-
-    @property
-    def watermark(self) -> dt.datetime | None:
-        return self._watermark
-
-    async def start(self) -> None:
-        pass
-
-    async def seek(self, timestamp: dt.datetime) -> None:
-        pass
-
-    async def read(self) -> pa.RecordBatch:
-        if self._index >= len(self._batches):
-            return pa.RecordBatch.from_pydict(
-                {"user_id": [], "country": [], "latitude": [], "longitude": [], "event_time": []},
-                schema=self._batches[0].schema if self._batches else None,
-            )
-        batch = self._batches[self._index]
-        self._index += 1
-        if batch.num_rows > 0:
-            self._watermark = self._time_notion.compute_watermark(batch)
-        return batch
-
-    async def stop(self) -> None:
-        pass
-
-
-class FakeSink:
-    def __init__(self):
-        self.batches: list[pa.RecordBatch] = []
-
-    async def write(self, batch: pa.RecordBatch) -> None:
-        self.batches.append(batch)
-
-    def to_dicts(self) -> list[list[dict]]:
-        return [
-            [{col: batch.column(col)[i].as_py() for col in batch.schema.names} for i in range(batch.num_rows)]
-            for batch in self.batches
-        ]
 
 
 def make_location_batch(
