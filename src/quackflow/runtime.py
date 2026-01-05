@@ -63,6 +63,9 @@ class OutputStep:
         if self._config.trigger_window is not None and self._last_fired_window is not None:
             window_seconds = int(self._config.trigger_window.total_seconds())
             self._last_fired_window = self._last_fired_window + dt.timedelta(seconds=window_seconds)
+            self._engine.set_window_end(self._last_fired_window)
+        elif self.effective_watermark is not None:
+            self._engine.set_window_end(self.effective_watermark)
         result = self._engine.query(self._config.sql)
         await self._config.sink.write(result)
 
