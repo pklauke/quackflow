@@ -48,26 +48,71 @@ class OutputConfig:
         return self
 
 
-class Step:
-    def __init__(self, name: str, step_type: str, config: SourceConfig | ViewConfig | OutputConfig):
+class Node:
+    def __init__(self, name: str, node_type: str, config: SourceConfig | ViewConfig | OutputConfig):
         self.name = name
-        self.step_type = step_type
+        self.node_type = node_type
         self.config = config
-        self.upstream: list[Step] = []
-        self.downstream: list[Step] = []
+        self.upstream: list[Node] = []
+        self.downstream: list[Node] = []
+        self._watermark: dt.datetime | None = None  # For source nodes
+        self._upstream_watermarks: dict[str, dt.datetime] = {}  # For view/output nodes
+
+    @property
+    def effective_watermark(self) -> dt.datetime | None:
+        """Effective watermark for this node."""
+        if self.node_type == "source":
+            return self._watermark
+        if not self._upstream_watermarks:
+            return None
+        return min(self._upstream_watermarks.values())
+
+    def set_watermark(self, watermark: dt.datetime) -> None:
+        """Set watermark for source nodes and propagate downstream."""
+        self._watermark = watermark
+        self._propagate_watermark()
+
+    def receive_watermark(self, upstream_name: str, watermark: dt.datetime) -> None:
+        """Receive watermark update from an upstream node."""
+        old_effective = self.effective_watermark
+        self._upstream_watermarks[upstream_name] = watermark
+        new_effective = self.effective_watermark
+
+        # If our effective watermark advanced, propagate downstream
+        if new_effective is not None and (old_effective is None or new_effective > old_effective):
+            self._propagate_watermark()
+
+    def _propagate_watermark(self) -> None:
+        """Propagate this node's effective watermark to all downstream nodes."""
+        watermark = self.effective_watermark
+        if watermark is not None:
+            for downstream in self.downstream:
+                downstream.receive_watermark(self.name, watermark)
 
 
 class DAG:
     def __init__(self):
-        self.steps: list[Step] = []
-        self._steps_by_name: dict[str, Step] = {}
+        self.nodes: list[Node] = []
+        self._nodes_by_name: dict[str, Node] = {}
 
-    def add_step(self, step: Step) -> None:
-        self.steps.append(step)
-        self._steps_by_name[step.name] = step
+    def add_node(self, node: Node) -> None:
+        self.nodes.append(node)
+        self._nodes_by_name[node.name] = node
 
-    def get_step(self, name: str) -> Step:
-        return self._steps_by_name[name]
+    def get_node(self, name: str) -> Node:
+        return self._nodes_by_name[name]
+
+    def connect(self, upstream_name: str, downstream_name: str) -> None:
+        upstream = self._nodes_by_name[upstream_name]
+        downstream = self._nodes_by_name[downstream_name]
+        upstream.downstream.append(downstream)
+        downstream.upstream.append(upstream)
+
+    def source_nodes(self) -> list[Node]:
+        return [n for n in self.nodes if n.node_type == "source"]
+
+    def output_nodes(self) -> list[Node]:
+        return [n for n in self.nodes if n.node_type == "output"]
 
 
 class Quackflow:
@@ -108,25 +153,21 @@ class Quackflow:
         dag = DAG()
 
         for name, config in self.sources.items():
-            step = Step(name, "source", config)
-            dag.add_step(step)
+            node = Node(name, "source", config)
+            dag.add_node(node)
 
         for name, config in self.views.items():
-            step = Step(name, "view", config)
-            dag.add_step(step)
+            node = Node(name, "view", config)
+            dag.add_node(node)
 
             for dep_name in config.depends_on:
-                upstream_step = dag.get_step(dep_name)
-                step.upstream.append(upstream_step)
-                upstream_step.downstream.append(step)
+                dag.connect(dep_name, name)
 
         for i, config in enumerate(self.outputs):
-            step = Step(f"output_{i}", "output", config)
-            dag.add_step(step)
+            node = Node(f"output_{i}", "output", config)
+            dag.add_node(node)
 
             for dep_name in config.depends_on:
-                upstream_step = dag.get_step(dep_name)
-                step.upstream.append(upstream_step)
-                upstream_step.downstream.append(step)
+                dag.connect(dep_name, f"output_{i}")
 
         return dag

@@ -1,7 +1,7 @@
 import asyncio
 import datetime as dt
 
-from quackflow.app import OutputConfig, Quackflow, SourceConfig
+from quackflow.app import DAG, Node, OutputConfig, Quackflow, SourceConfig
 from quackflow.engine import Engine
 from quackflow.source import ReplayableSource
 
@@ -13,28 +13,20 @@ class RuntimeState:
 
 
 class OutputStep:
-    def __init__(
-        self,
-        config: OutputConfig,
-        engine: Engine,
-        state: RuntimeState,
-        upstream_sources: list[str],
-    ):
-        self._config = config
+    def __init__(self, node: Node, engine: Engine, state: RuntimeState):
+        self._node = node
+        self._config: OutputConfig = node.config  # type: ignore[assignment]
         self._engine = engine
         self._state = state
-        self._upstream_watermarks: dict[str, dt.datetime | None] = dict.fromkeys(upstream_sources, None)
         self._records_at_last_fire = 0
         self._last_fired_window: dt.datetime | None = None
 
     @property
-    def watermark(self) -> dt.datetime | None:
-        watermarks = [w for w in self._upstream_watermarks.values() if w is not None]
-        return min(watermarks) if watermarks else None
+    def effective_watermark(self) -> dt.datetime | None:
+        """Effective watermark from the node (min of upstream watermarks)."""
+        return self._node.effective_watermark
 
-    def initialize_watermarks(self, start: dt.datetime) -> None:
-        for name in self._upstream_watermarks:
-            self._upstream_watermarks[name] = start
+    def initialize(self, start: dt.datetime) -> None:
         if self._config.trigger_window is not None:
             self._last_fired_window = self._snap_to_window(start)
 
@@ -46,14 +38,10 @@ class OutputStep:
         snapped_seconds = int(seconds_since_midnight // window_seconds) * window_seconds
         return midnight + dt.timedelta(seconds=snapped_seconds)
 
-    async def receive_watermark(self, source_name: str, watermark: dt.datetime) -> None:
-        old_effective = self.watermark
-        self._upstream_watermarks[source_name] = watermark
-        new_effective = self.watermark
-
-        if new_effective is not None and (old_effective is None or new_effective > old_effective):
-            while self._should_fire():
-                await self._fire()
+    async def on_watermark_advance(self) -> None:
+        """Called when an upstream source's watermark advances."""
+        while self._should_fire():
+            await self._fire()
 
     def _should_fire(self) -> bool:
         if self._config.trigger_records is not None:
@@ -62,7 +50,7 @@ class OutputStep:
                 return True
 
         if self._config.trigger_window is not None:
-            watermark = self.watermark
+            watermark = self.effective_watermark
             if watermark is not None and self._last_fired_window is not None:
                 current_window = self._snap_to_window(watermark)
                 if current_window > self._last_fired_window:
@@ -80,19 +68,12 @@ class OutputStep:
 
 
 class ImportStep:
-    def __init__(
-        self,
-        name: str,
-        config: SourceConfig,
-        engine: Engine,
-        state: RuntimeState,
-        downstream: list[OutputStep],
-    ):
-        self._name = name
-        self._config = config
+    def __init__(self, node: Node, engine: Engine, state: RuntimeState, output_steps: dict[str, OutputStep]):
+        self._node = node
+        self._config: SourceConfig = node.config  # type: ignore[assignment]
         self._engine = engine
         self._state = state
-        self._downstream = downstream
+        self._output_steps = output_steps
 
     async def run(self, start: dt.datetime, end: dt.datetime | None) -> None:
         source = self._config.source
@@ -106,25 +87,43 @@ class ImportStep:
                 if end is not None:
                     watermark = source.watermark
                     if watermark is not None and watermark >= end:
-                        self._state.source_stopped[self._name] = True
+                        self._state.source_stopped[self._node.name] = True
                         break
 
                 batch = await source.read()
                 if batch.num_rows > 0:
-                    self._engine.insert(self._name, batch)
-                    self._state.source_records[self._name] = (
-                        self._state.source_records.get(self._name, 0) + batch.num_rows
+                    self._engine.insert(self._node.name, batch)
+                    self._state.source_records[self._node.name] = (
+                        self._state.source_records.get(self._node.name, 0) + batch.num_rows
                     )
 
                     new_watermark = source.watermark
                     if new_watermark is not None:
-                        for output in self._downstream:
-                            await output.receive_watermark(self._name, new_watermark)
+                        self._node.set_watermark(new_watermark)
+                        await self._notify_downstream_outputs()
 
                 if batch.num_rows == 0 and all(self._state.source_stopped.values()):
                     break
         finally:
             await source.stop()
+
+    async def _notify_downstream_outputs(self) -> None:
+        """Notify all downstream output steps that watermark has advanced."""
+        notified: set[str] = set()
+
+        def find_outputs(node: Node) -> None:
+            for downstream in node.downstream:
+                if downstream.node_type == "output" and downstream.name not in notified:
+                    notified.add(downstream.name)
+                elif downstream.node_type == "view":
+                    find_outputs(downstream)
+
+        find_outputs(self._node)
+
+        for output_name in notified:
+            output_step = self._output_steps.get(output_name)
+            if output_step:
+                await output_step.on_watermark_advance()
 
 
 class Runtime:
@@ -134,59 +133,34 @@ class Runtime:
         self._state = RuntimeState()
 
     async def execute(self, start: dt.datetime, end: dt.datetime | None = None) -> None:
-        self._app.compile()
+        dag = self._app.compile()
 
-        for name, source_config in self._app.sources.items():
-            self._engine.create_table(name, source_config.schema)
-            self._state.source_records[name] = 0
-            self._state.source_stopped[name] = False
+        for node in dag.source_nodes():
+            config: SourceConfig = node.config  # type: ignore[assignment]
+            self._engine.create_table(node.name, config.schema)
+            self._state.source_records[node.name] = 0
+            self._state.source_stopped[node.name] = False
+            node._watermark = start  # Initial watermark, DAG not connected yet
 
-        for name, view_config in self._app.views.items():
-            self._engine.create_view(name, view_config.sql)
+        for node in dag.nodes:
+            if node.node_type == "view":
+                config = node.config
+                self._engine.create_view(node.name, config.sql)  # type: ignore[union-attr]
 
-        output_steps = []
-        for config in self._app.outputs:
-            upstream_sources = self._find_upstream_sources(config)
-            step = OutputStep(config, self._engine, self._state, upstream_sources)
-            step.initialize_watermarks(start)
-            output_steps.append(step)
+        output_steps: dict[str, OutputStep] = {}
+        for node in dag.output_nodes():
+            step = OutputStep(node, self._engine, self._state)
+            step.initialize(start)
+            output_steps[node.name] = step
 
-        import_steps = []
-        for name, source_config in self._app.sources.items():
-            downstream = self._find_downstream_outputs(name, output_steps)
-            step = ImportStep(name, source_config, self._engine, self._state, downstream)
+        import_steps: list[ImportStep] = []
+        for node in dag.source_nodes():
+            step = ImportStep(node, self._engine, self._state, output_steps)
             import_steps.append(step)
 
         tasks = [asyncio.create_task(step.run(start, end)) for step in import_steps]
         await asyncio.gather(*tasks)
 
-        for output in output_steps:
-            if output._should_fire():
-                await output._fire()
-
-    def _find_upstream_sources(self, output_config: OutputConfig) -> list[str]:
-        result = []
-        visited = set()
-        to_check = list(output_config.depends_on)
-
-        while to_check:
-            name = to_check.pop()
-            if name in visited:
-                continue
-            visited.add(name)
-
-            if name in self._app.sources:
-                result.append(name)
-            elif name in self._app.views:
-                to_check.extend(self._app.views[name].depends_on)
-
-        return result
-
-    def _find_downstream_outputs(
-        self, source_name: str, output_steps: list[OutputStep]
-    ) -> list[OutputStep]:
-        result = []
-        for output in output_steps:
-            if source_name in output._upstream_watermarks:
-                result.append(output)
-        return result
+        for output_step in output_steps.values():
+            if output_step._should_fire():
+                await output_step._fire()

@@ -136,7 +136,7 @@ class TestQuackflowDAG:
         dag = app.compile()
 
         assert dag is not None
-        assert len(dag.steps) == 3
+        assert len(dag.nodes) == 3
 
     def test_dag_has_correct_dependencies(self):
         app = Quackflow()
@@ -150,12 +150,12 @@ class TestQuackflowDAG:
 
         dag = app.compile()
 
-        output_step = dag.get_step("output_0")
-        view_step = dag.get_step("user_counts")
-        source_step = dag.get_step("events")
+        output_node = dag.get_node("output_0")
+        view_node = dag.get_node("user_counts")
+        source_node = dag.get_node("events")
 
-        assert view_step in output_step.upstream
-        assert source_step in view_step.upstream
+        assert view_node in output_node.upstream
+        assert source_node in view_node.upstream
 
     def test_dag_fan_out(self):
         app = Quackflow()
@@ -168,14 +168,14 @@ class TestQuackflowDAG:
 
         dag = app.compile()
 
-        source_step = dag.get_step("events")
-        output1 = dag.get_step("output_0")
-        output2 = dag.get_step("output_1")
+        source_node = dag.get_node("events")
+        output1 = dag.get_node("output_0")
+        output2 = dag.get_node("output_1")
 
-        assert source_step in output1.upstream
-        assert source_step in output2.upstream
-        assert output1 in source_step.downstream
-        assert output2 in source_step.downstream
+        assert source_node in output1.upstream
+        assert source_node in output2.upstream
+        assert output1 in source_node.downstream
+        assert output2 in source_node.downstream
 
     def test_dag_fan_in_join(self):
         app = Quackflow()
@@ -193,9 +193,9 @@ class TestQuackflowDAG:
 
         dag = app.compile()
 
-        events_step = dag.get_step("events")
-        users_step = dag.get_step("users")
-        joined_step = dag.get_step("joined")
+        events_node = dag.get_node("events")
+        users_node = dag.get_node("users")
+        joined_node = dag.get_node("joined")
 
-        assert events_step in joined_step.upstream
-        assert users_step in joined_step.upstream
+        assert events_node in joined_node.upstream
+        assert users_node in joined_node.upstream
