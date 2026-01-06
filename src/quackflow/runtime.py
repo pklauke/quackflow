@@ -15,7 +15,7 @@ class RuntimeState:
 class OutputStep:
     def __init__(self, node: Node, engine: Engine, state: RuntimeState):
         self._node = node
-        self._binding: OutputBinding = node.config  # type: ignore[assignment]
+        self._binding: OutputBinding = node.binding  # type: ignore[assignment]
         self._engine = engine
         self._state = state
         self._records_at_last_fire = 0
@@ -71,12 +71,11 @@ class OutputStep:
 
 
 class ImportStep:
-    def __init__(self, node: Node, engine: Engine, state: RuntimeState, output_steps: dict[str, OutputStep]):
+    def __init__(self, node: Node, engine: Engine, state: RuntimeState):
         self._node = node
-        self._binding: SourceBinding = node.config  # type: ignore[assignment]
+        self._binding: SourceBinding = node.binding  # type: ignore[assignment]
         self._engine = engine
         self._state = state
-        self._output_steps = output_steps
 
     async def run(self, start: dt.datetime, end: dt.datetime | None) -> None:
         source = self._binding.source
@@ -102,31 +101,12 @@ class ImportStep:
 
                     new_watermark = source.watermark
                     if new_watermark is not None:
-                        self._node.set_watermark(new_watermark)
-                        await self._notify_downstream_outputs()
+                        await self._node.set_watermark(new_watermark)
 
                 if batch.num_rows == 0 and all(self._state.source_stopped.values()):
                     break
         finally:
             await source.stop()
-
-    async def _notify_downstream_outputs(self) -> None:
-        """Notify all downstream output steps that watermark has advanced."""
-        notified: set[str] = set()
-
-        def find_outputs(node: Node) -> None:
-            for downstream in node.downstream:
-                if downstream.node_type == "output" and downstream.name not in notified:
-                    notified.add(downstream.name)
-                elif downstream.node_type == "view":
-                    find_outputs(downstream)
-
-        find_outputs(self._node)
-
-        for output_name in notified:
-            output_step = self._output_steps.get(output_name)
-            if output_step:
-                await output_step.on_watermark_advance()
 
 
 class Runtime:
@@ -139,31 +119,32 @@ class Runtime:
         dag = self._app.compile()
 
         for node in dag.source_nodes():
-            binding: SourceBinding = node.config  # type: ignore[assignment]
+            binding: SourceBinding = node.binding  # type: ignore[assignment]
             self._engine.create_table(node.name, binding.schema)
             self._state.source_records[node.name] = 0
             self._state.source_stopped[node.name] = False
-            node._watermark = start  # Initial watermark, DAG not connected yet
+            node._watermark = start
 
         for node in dag.nodes:
             if node.node_type == "view":
-                config = node.config
-                self._engine.create_view(node.name, config.sql)  # type: ignore[union-attr]
+                binding = node.binding
+                self._engine.create_view(node.name, binding.sql)  # type: ignore[union-attr]
 
-        output_steps: dict[str, OutputStep] = {}
+        output_steps: list[OutputStep] = []
         for node in dag.output_nodes():
             step = OutputStep(node, self._engine, self._state)
             step.initialize(start)
-            output_steps[node.name] = step
+            node.set_watermark_callback(step.on_watermark_advance)
+            output_steps.append(step)
 
         import_steps: list[ImportStep] = []
         for node in dag.source_nodes():
-            step = ImportStep(node, self._engine, self._state, output_steps)
+            step = ImportStep(node, self._engine, self._state)
             import_steps.append(step)
 
         tasks = [asyncio.create_task(step.run(start, end)) for step in import_steps]
         await asyncio.gather(*tasks)
 
-        for output_step in output_steps.values():
+        for output_step in output_steps:
             if output_step._should_fire():
                 await output_step._fire()

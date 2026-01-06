@@ -48,15 +48,23 @@ class OutputBinding:
         return self
 
 
+WatermarkCallback = typing.Callable[[], typing.Awaitable[None]]
+
+
 class Node:
-    def __init__(self, name: str, node_type: str, config: SourceBinding | ViewBinding | OutputBinding):
+    def __init__(self, name: str, node_type: str, binding: SourceBinding | ViewBinding | OutputBinding):
         self.name = name
         self.node_type = node_type
-        self.config = config
+        self.binding = binding
         self.upstream: list[Node] = []
         self.downstream: list[Node] = []
         self._watermark: dt.datetime | None = None  # For source nodes
         self._upstream_watermarks: dict[str, dt.datetime] = {}  # For view/output nodes
+        self._on_watermark_advance: WatermarkCallback | None = None
+
+    def set_watermark_callback(self, callback: WatermarkCallback) -> None:
+        """Register a callback to be called when effective watermark advances."""
+        self._on_watermark_advance = callback
 
     @property
     def effective_watermark(self) -> dt.datetime | None:
@@ -70,27 +78,29 @@ class Node:
             return None
         return min(self._upstream_watermarks.values())
 
-    def set_watermark(self, watermark: dt.datetime) -> None:
+    async def set_watermark(self, watermark: dt.datetime) -> None:
         """Set watermark for source nodes and propagate downstream."""
         self._watermark = watermark
-        self._propagate_watermark()
+        await self._propagate_watermark()
 
-    def receive_watermark(self, upstream_name: str, watermark: dt.datetime) -> None:
+    async def receive_watermark(self, upstream_name: str, watermark: dt.datetime) -> None:
         """Receive watermark update from an upstream node."""
         old_effective = self.effective_watermark
         self._upstream_watermarks[upstream_name] = watermark
         new_effective = self.effective_watermark
 
-        # If our effective watermark advanced, propagate downstream
+        # If our effective watermark advanced, notify and propagate downstream
         if new_effective is not None and (old_effective is None or new_effective > old_effective):
-            self._propagate_watermark()
+            if self._on_watermark_advance is not None:
+                await self._on_watermark_advance()
+            await self._propagate_watermark()
 
-    def _propagate_watermark(self) -> None:
+    async def _propagate_watermark(self) -> None:
         """Propagate this node's effective watermark to all downstream nodes."""
         watermark = self.effective_watermark
         if watermark is not None:
             for downstream in self.downstream:
-                downstream.receive_watermark(self.name, watermark)
+                await downstream.receive_watermark(self.name, watermark)
 
 
 class DAG:
@@ -149,28 +159,28 @@ class Quackflow:
         return binding
 
     def compile(self) -> DAG:
-        for config in self.outputs:
-            if config.trigger_window is None and config.trigger_records is None:
+        for binding in self.outputs:
+            if binding.trigger_window is None and binding.trigger_records is None:
                 raise ValueError("All outputs must have a trigger (window or records)")
 
         dag = DAG()
 
-        for name, config in self.sources.items():
-            node = Node(name, "source", config)
+        for name, binding in self.sources.items():
+            node = Node(name, "source", binding)
             dag.add_node(node)
 
-        for name, config in self.views.items():
-            node = Node(name, "view", config)
+        for name, binding in self.views.items():
+            node = Node(name, "view", binding)
             dag.add_node(node)
 
-            for dep_name in config.depends_on:
+            for dep_name in binding.depends_on:
                 dag.connect(dep_name, name)
 
-        for i, config in enumerate(self.outputs):
-            node = Node(f"output_{i}", "output", config)
+        for i, binding in enumerate(self.outputs):
+            node = Node(f"output_{i}", "output", binding)
             dag.add_node(node)
 
-            for dep_name in config.depends_on:
+            for dep_name in binding.depends_on:
                 dag.connect(dep_name, f"output_{i}")
 
         return dag
