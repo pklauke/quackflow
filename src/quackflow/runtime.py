@@ -1,7 +1,7 @@
 import asyncio
 import datetime as dt
 
-from quackflow.app import DAG, Node, OutputConfig, Quackflow, SourceConfig
+from quackflow.app import DAG, Node, OutputBinding, Quackflow, SourceBinding
 from quackflow.engine import Engine
 from quackflow.source import ReplayableSource
 
@@ -15,7 +15,7 @@ class RuntimeState:
 class OutputStep:
     def __init__(self, node: Node, engine: Engine, state: RuntimeState):
         self._node = node
-        self._config: OutputConfig = node.config  # type: ignore[assignment]
+        self._binding: OutputBinding = node.config  # type: ignore[assignment]
         self._engine = engine
         self._state = state
         self._records_at_last_fire = 0
@@ -27,12 +27,12 @@ class OutputStep:
         return self._node.effective_watermark
 
     def initialize(self, start: dt.datetime) -> None:
-        if self._config.trigger_window is not None:
+        if self._binding.trigger_window is not None:
             self._last_fired_window = self._snap_to_window(start)
 
     def _snap_to_window(self, watermark: dt.datetime) -> dt.datetime:
         """Snap watermark down to the previous window boundary."""
-        window_seconds = int(self._config.trigger_window.total_seconds())  # type: ignore[union-attr]
+        window_seconds = int(self._binding.trigger_window.total_seconds())  # type: ignore[union-attr]
         midnight = watermark.replace(hour=0, minute=0, second=0, microsecond=0)
         seconds_since_midnight = (watermark - midnight).total_seconds()
         snapped_seconds = int(seconds_since_midnight // window_seconds) * window_seconds
@@ -44,12 +44,12 @@ class OutputStep:
             await self._fire()
 
     def _should_fire(self) -> bool:
-        if self._config.trigger_records is not None:
+        if self._binding.trigger_records is not None:
             total = sum(self._state.source_records.values())
-            if total - self._records_at_last_fire >= self._config.trigger_records:
+            if total - self._records_at_last_fire >= self._binding.trigger_records:
                 return True
 
-        if self._config.trigger_window is not None:
+        if self._binding.trigger_window is not None:
             watermark = self.effective_watermark
             if watermark is not None and self._last_fired_window is not None:
                 current_window = self._snap_to_window(watermark)
@@ -60,26 +60,26 @@ class OutputStep:
 
     async def _fire(self) -> None:
         self._records_at_last_fire = sum(self._state.source_records.values())
-        if self._config.trigger_window is not None and self._last_fired_window is not None:
-            window_seconds = int(self._config.trigger_window.total_seconds())
+        if self._binding.trigger_window is not None and self._last_fired_window is not None:
+            window_seconds = int(self._binding.trigger_window.total_seconds())
             self._last_fired_window = self._last_fired_window + dt.timedelta(seconds=window_seconds)
             self._engine.set_window_end(self._last_fired_window)
         elif self.effective_watermark is not None:
             self._engine.set_window_end(self.effective_watermark)
-        result = self._engine.query(self._config.sql)
-        await self._config.sink.write(result)
+        result = self._engine.query(self._binding.sql)
+        await self._binding.sink.write(result)
 
 
 class ImportStep:
     def __init__(self, node: Node, engine: Engine, state: RuntimeState, output_steps: dict[str, OutputStep]):
         self._node = node
-        self._config: SourceConfig = node.config  # type: ignore[assignment]
+        self._binding: SourceBinding = node.config  # type: ignore[assignment]
         self._engine = engine
         self._state = state
         self._output_steps = output_steps
 
     async def run(self, start: dt.datetime, end: dt.datetime | None) -> None:
-        source = self._config.source
+        source = self._binding.source
 
         if isinstance(source, ReplayableSource):
             await source.seek(start)
@@ -139,8 +139,8 @@ class Runtime:
         dag = self._app.compile()
 
         for node in dag.source_nodes():
-            config: SourceConfig = node.config  # type: ignore[assignment]
-            self._engine.create_table(node.name, config.schema)
+            binding: SourceBinding = node.config  # type: ignore[assignment]
+            self._engine.create_table(node.name, binding.schema)
             self._state.source_records[node.name] = 0
             self._state.source_stopped[node.name] = False
             node._watermark = start  # Initial watermark, DAG not connected yet

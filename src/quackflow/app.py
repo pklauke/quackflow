@@ -5,14 +5,14 @@ from quackflow.schema import Schema
 from quackflow.source import Source
 
 
-class SourceConfig:
+class SourceBinding:
     def __init__(self, name: str, source: Source, schema: type[Schema]):
         self.name = name
         self.source = source
         self.schema = schema
 
 
-class ViewConfig:
+class ViewBinding:
     def __init__(self, name: str, sql: str, depends_on: list[str], materialize: bool = False):
         self.name = name
         self.sql = sql
@@ -23,7 +23,7 @@ class ViewConfig:
 SECONDS_PER_DAY = 86400
 
 
-class OutputConfig:
+class OutputBinding:
     def __init__(self, sink: typing.Any, sql: str, schema: type[Schema], depends_on: list[str]):
         self.sink = sink
         self.sql = sql
@@ -36,7 +36,7 @@ class OutputConfig:
         self,
         window: dt.timedelta | None = None,
         records: int | None = None,
-    ) -> "OutputConfig":
+    ) -> "OutputBinding":
         if window is not None:
             window_seconds = int(window.total_seconds())
             if window_seconds <= 0:
@@ -49,7 +49,7 @@ class OutputConfig:
 
 
 class Node:
-    def __init__(self, name: str, node_type: str, config: SourceConfig | ViewConfig | OutputConfig):
+    def __init__(self, name: str, node_type: str, config: SourceBinding | ViewBinding | OutputBinding):
         self.name = name
         self.node_type = node_type
         self.config = config
@@ -120,9 +120,9 @@ class DAG:
 
 class Quackflow:
     def __init__(self):
-        self.sources: dict[str, SourceConfig] = {}
-        self.views: dict[str, ViewConfig] = {}
-        self.outputs: list[OutputConfig] = []
+        self.sources: dict[str, SourceBinding] = {}
+        self.views: dict[str, ViewBinding] = {}
+        self.outputs: list[OutputBinding] = []
 
     def source(
         self,
@@ -131,10 +131,10 @@ class Quackflow:
         *,
         schema: type[Schema],
     ) -> None:
-        self.sources[name] = SourceConfig(name, source, schema)
+        self.sources[name] = SourceBinding(name, source, schema)
 
     def view(self, name: str, sql: str, *, depends_on: list[str], materialize: bool = False) -> None:
-        self.views[name] = ViewConfig(name, sql, depends_on, materialize)
+        self.views[name] = ViewBinding(name, sql, depends_on, materialize)
 
     def output(
         self,
@@ -143,10 +143,10 @@ class Quackflow:
         *,
         schema: type[Schema],
         depends_on: list[str],
-    ) -> OutputConfig:
-        config = OutputConfig(sink, sql, schema, depends_on)
-        self.outputs.append(config)
-        return config
+    ) -> OutputBinding:
+        binding = OutputBinding(sink, sql, schema, depends_on)
+        self.outputs.append(binding)
+        return binding
 
     def compile(self) -> DAG:
         for config in self.outputs:
