@@ -60,10 +60,13 @@ class Node:
 
     @property
     def effective_watermark(self) -> dt.datetime | None:
-        """Effective watermark for this node."""
+        """Effective watermark for this node.
+
+        Returns None until ALL upstream nodes have reported watermarks.
+        """
         if self.node_type == "source":
             return self._watermark
-        if not self._upstream_watermarks:
+        if len(self._upstream_watermarks) < len(self.upstream):
             return None
         return min(self._upstream_watermarks.values())
 
