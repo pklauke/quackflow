@@ -1,22 +1,15 @@
 import asyncio
 import datetime as dt
 
-from quackflow.app import Node, Quackflow, SourceBinding
+from quackflow.app import DataPacket, Node, Quackflow, SourceBinding
 from quackflow.engine import Engine
 from quackflow.source import ReplayableSource
 
 
-class RuntimeState:
-    def __init__(self):
-        self.source_records: dict[str, int] = {}
-        self.source_stopped: dict[str, bool] = {}
-
-
 class OutputStep:
-    def __init__(self, node: Node, engine: Engine, state: RuntimeState):
+    def __init__(self, node: Node, engine: Engine):
         self._node = node
         self._engine = engine
-        self._state = state
         self._records_at_last_fire = 0
         self._last_fired_window: dt.datetime | None = None
 
@@ -37,15 +30,14 @@ class OutputStep:
         snapped_seconds = int(seconds_since_midnight // window_seconds) * window_seconds
         return midnight + dt.timedelta(seconds=snapped_seconds)
 
-    async def on_watermark_advance(self) -> None:
-        """Called when an upstream source's watermark advances."""
+    async def on_advance(self) -> None:
+        """Called when the node's effective watermark advances."""
         while self._should_fire():
             await self._fire()
 
     def _should_fire(self) -> bool:
         if self._node.binding.trigger_records is not None:
-            total = sum(self._state.source_records.values())
-            if total - self._records_at_last_fire >= self._node.binding.trigger_records:
+            if self._node.total_records - self._records_at_last_fire >= self._node.binding.trigger_records:
                 return True
 
         if self._node.binding.trigger_window is not None:
@@ -58,7 +50,7 @@ class OutputStep:
         return False
 
     async def _fire(self) -> None:
-        self._records_at_last_fire = sum(self._state.source_records.values())
+        self._records_at_last_fire = self._node.total_records
         if self._node.binding.trigger_window is not None and self._last_fired_window is not None:
             window_seconds = int(self._node.binding.trigger_window.total_seconds())
             self._last_fired_window = self._last_fired_window + dt.timedelta(seconds=window_seconds)
@@ -70,11 +62,11 @@ class OutputStep:
 
 
 class ImportStep:
-    def __init__(self, node: Node, engine: Engine, state: RuntimeState):
+    def __init__(self, node: Node, engine: Engine, source_stopped: dict[str, bool]):
         self._node = node
         self._binding: SourceBinding = node.binding  # type: ignore[assignment]
         self._engine = engine
-        self._state = state
+        self._source_stopped = source_stopped
 
     async def run(self, start: dt.datetime, end: dt.datetime | None) -> None:
         source = self._binding.source
@@ -88,21 +80,18 @@ class ImportStep:
                 if end is not None:
                     watermark = source.watermark
                     if watermark is not None and watermark >= end:
-                        self._state.source_stopped[self._node.name] = True
+                        self._source_stopped[self._node.name] = True
                         break
 
                 batch = await source.read()
                 if batch.num_rows > 0:
                     self._engine.insert(self._node.name, batch)
-                    self._state.source_records[self._node.name] = (
-                        self._state.source_records.get(self._node.name, 0) + batch.num_rows
-                    )
+                    watermark = source.watermark
+                    if watermark is not None:
+                        packet = DataPacket(batch=batch, watermark=watermark)
+                        await self._node.send(packet)
 
-                    new_watermark = source.watermark
-                    if new_watermark is not None:
-                        await self._node.set_watermark(new_watermark)
-
-                if batch.num_rows == 0 and all(self._state.source_stopped.values()):
+                if batch.num_rows == 0 and all(self._source_stopped.values()):
                     break
         finally:
             await source.stop()
@@ -112,16 +101,15 @@ class Runtime:
     def __init__(self, app: Quackflow):
         self._app = app
         self._engine = Engine()
-        self._state = RuntimeState()
 
     async def execute(self, start: dt.datetime, end: dt.datetime | None = None) -> None:
         dag = self._app.compile()
+        source_stopped: dict[str, bool] = {}
 
         for node in dag.source_nodes():
             binding: SourceBinding = node.binding  # type: ignore[assignment]
             self._engine.create_table(node.name, binding.schema)
-            self._state.source_records[node.name] = 0
-            self._state.source_stopped[node.name] = False
+            source_stopped[node.name] = False
             node._watermark = start
 
         for node in dag.nodes:
@@ -131,14 +119,14 @@ class Runtime:
 
         output_steps: list[OutputStep] = []
         for node in dag.output_nodes():
-            step = OutputStep(node, self._engine, self._state)
+            step = OutputStep(node, self._engine)
             step.initialize(start)
-            node.set_watermark_callback(step.on_watermark_advance)
+            node.set_on_advance_callback(step.on_advance)
             output_steps.append(step)
 
         import_steps: list[ImportStep] = []
         for node in dag.source_nodes():
-            step = ImportStep(node, self._engine, self._state)
+            step = ImportStep(node, self._engine, source_stopped)
             import_steps.append(step)
 
         tasks = [asyncio.create_task(step.run(start, end)) for step in import_steps]

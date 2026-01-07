@@ -1,8 +1,17 @@
 import datetime as dt
 import typing
+from dataclasses import dataclass
+
+import pyarrow as pa
 
 from quackflow.schema import Schema
 from quackflow.source import Source
+
+
+@dataclass
+class DataPacket:
+    batch: pa.RecordBatch
+    watermark: dt.datetime
 
 
 class SourceBinding:
@@ -48,7 +57,7 @@ class OutputBinding:
         return self
 
 
-WatermarkCallback = typing.Callable[[], typing.Awaitable[None]]
+OnAdvanceCallback = typing.Callable[[], typing.Awaitable[None]]
 
 
 class Node:
@@ -60,11 +69,12 @@ class Node:
         self.downstream: list[Node] = []
         self._watermark: dt.datetime | None = None  # For source nodes
         self._upstream_watermarks: dict[str, dt.datetime] = {}  # For view/output nodes
-        self._on_watermark_advance: WatermarkCallback | None = None
+        self._upstream_records: dict[str, int] = {}  # Records received per upstream
+        self._on_advance: OnAdvanceCallback | None = None
 
-    def set_watermark_callback(self, callback: WatermarkCallback) -> None:
+    def set_on_advance_callback(self, callback: OnAdvanceCallback) -> None:
         """Register a callback to be called when effective watermark advances."""
-        self._on_watermark_advance = callback
+        self._on_advance = callback
 
     @property
     def effective_watermark(self) -> dt.datetime | None:
@@ -78,29 +88,33 @@ class Node:
             return None
         return min(self._upstream_watermarks.values())
 
-    async def set_watermark(self, watermark: dt.datetime) -> None:
-        """Set watermark for source nodes and propagate downstream."""
-        self._watermark = watermark
-        await self._propagate_watermark()
+    @property
+    def total_records(self) -> int:
+        """Total records received from all upstream nodes."""
+        return sum(self._upstream_records.values())
 
-    async def receive_watermark(self, upstream_name: str, watermark: dt.datetime) -> None:
-        """Receive watermark update from an upstream node."""
+    async def send(self, packet: DataPacket) -> None:
+        """Send a data packet downstream (for source nodes)."""
+        self._watermark = packet.watermark
+        await self._propagate(packet)
+
+    async def receive(self, upstream_name: str, packet: DataPacket) -> None:
+        """Receive a data packet from an upstream node."""
         old_effective = self.effective_watermark
-        self._upstream_watermarks[upstream_name] = watermark
+        self._upstream_watermarks[upstream_name] = packet.watermark
+        self._upstream_records[upstream_name] = self._upstream_records.get(upstream_name, 0) + packet.batch.num_rows
         new_effective = self.effective_watermark
 
-        # If our effective watermark advanced, notify and propagate downstream
+        # If our effective watermark advanced, notify callback and propagate downstream
         if new_effective is not None and (old_effective is None or new_effective > old_effective):
-            if self._on_watermark_advance is not None:
-                await self._on_watermark_advance()
-            await self._propagate_watermark()
+            if self._on_advance is not None:
+                await self._on_advance()
+            await self._propagate(packet)
 
-    async def _propagate_watermark(self) -> None:
-        """Propagate this node's effective watermark to all downstream nodes."""
-        watermark = self.effective_watermark
-        if watermark is not None:
-            for downstream in self.downstream:
-                await downstream.receive_watermark(self.name, watermark)
+    async def _propagate(self, packet: DataPacket) -> None:
+        """Propagate a data packet to all downstream nodes."""
+        for downstream in self.downstream:
+            await downstream.receive(self.name, packet)
 
 
 class DAG:
