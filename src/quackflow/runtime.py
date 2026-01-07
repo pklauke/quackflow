@@ -55,8 +55,6 @@ class OutputStep:
             window_seconds = int(self._node.binding.trigger_window.total_seconds())
             self._last_fired_window = self._last_fired_window + dt.timedelta(seconds=window_seconds)
             self._engine.set_window_end(self._last_fired_window)
-        elif self.effective_watermark is not None:
-            self._engine.set_window_end(self.effective_watermark)
         result = self._engine.query(self._node.binding.sql)
         await self._node.binding.sink.write(result)
 
