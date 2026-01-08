@@ -49,7 +49,6 @@ class TestGeospatialAggregation:
     async def test_location_aggregation_with_hopping_window(self):
         time_notion = EventTimeNotion(column="event_time")
 
-        # Window [10:00, 10:02) should have: alice, bob in US bucket 37, charlie in UK bucket 51
         batch = make_location_batch(
             user_ids=["alice", "alice", "bob", "charlie", "david"],
             countries=["US", "US", "US", "UK", "US"],
@@ -60,7 +59,7 @@ class TestGeospatialAggregation:
                 dt.datetime(2024, 1, 1, 10, 0, 30, tzinfo=dt.timezone.utc),
                 dt.datetime(2024, 1, 1, 10, 0, 45, tzinfo=dt.timezone.utc),
                 dt.datetime(2024, 1, 1, 10, 1, 0, tzinfo=dt.timezone.utc),
-                dt.datetime(2024, 1, 1, 10, 2, 30, tzinfo=dt.timezone.utc),  # after window end
+                dt.datetime(2024, 1, 1, 10, 2, 30, tzinfo=dt.timezone.utc),
             ],
         )
 
@@ -68,7 +67,7 @@ class TestGeospatialAggregation:
         sink = FakeSink()
 
         app = Quackflow()
-        app.source("user_locations", source, schema=UserLocationSchema)
+        app.source("user_locations", schema=UserLocationSchema)
 
         app.view(
             "location_buckets",
@@ -86,7 +85,7 @@ class TestGeospatialAggregation:
         )
 
         app.output(
-            sink,
+            "results",
             """
             SELECT
                 window_start,
@@ -101,7 +100,11 @@ class TestGeospatialAggregation:
             depends_on=["location_buckets"],
         ).trigger(window=dt.timedelta(minutes=1))
 
-        runtime = Runtime(app)
+        runtime = Runtime(
+            app,
+            sources={"user_locations": source},
+            sinks={"results": sink},
+        )
         await runtime.execute(
             start=dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
             end=dt.datetime(2024, 1, 1, 10, 2, tzinfo=dt.timezone.utc),
@@ -148,17 +151,9 @@ class RevenueAggSchema(Schema):
 class TestJoinWithMultipleSources:
     @pytest.mark.asyncio
     async def test_join_with_different_window_sizes(self):
-        """
-        Join orders with products using different window sizes but same hop:
-        - Orders: 1-minute size, 1-minute hop
-        - Products: 2-minute size, 1-minute hop
-        Join on window_end and product_id, then aggregate revenue per category.
-        """
         orders_time_notion = EventTimeNotion(column="event_time")
         products_time_notion = EventTimeNotion(column="event_time")
 
-        # Orders in [10:00, 10:01): o1, o2, o3
-        # Orders in [10:01, 10:02): o4
         orders_batch = pa.RecordBatch.from_pydict(
             {
                 "order_id": ["o1", "o2", "o3", "o4", "o5"],
@@ -174,7 +169,6 @@ class TestJoinWithMultipleSources:
             }
         )
 
-        # Products: p1=$100 electronics, p2=$50 clothing, p3=$200 electronics
         products_batch = pa.RecordBatch.from_pydict(
             {
                 "product_id": ["p1", "p2", "p3", "p4"],
@@ -194,8 +188,8 @@ class TestJoinWithMultipleSources:
         sink = FakeSink()
 
         app = Quackflow()
-        app.source("orders", orders_source, schema=OrderSchema)
-        app.source("products", products_source, schema=ProductSchema)
+        app.source("orders", schema=OrderSchema)
+        app.source("products", schema=ProductSchema)
 
         app.view(
             "orders_windowed",
@@ -235,7 +229,7 @@ class TestJoinWithMultipleSources:
         )
 
         app.output(
-            sink,
+            "results",
             """
             SELECT
                 window_end,
@@ -249,7 +243,11 @@ class TestJoinWithMultipleSources:
             depends_on=["orders_with_products"],
         ).trigger(window=dt.timedelta(minutes=1))
 
-        runtime = Runtime(app)
+        runtime = Runtime(
+            app,
+            sources={"orders": orders_source, "products": products_source},
+            sinks={"results": sink},
+        )
         await runtime.execute(
             start=dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
             end=dt.datetime(2024, 1, 1, 10, 2, tzinfo=dt.timezone.utc),
@@ -264,8 +262,6 @@ class TestJoinWithMultipleSources:
 
         all_results = [extract(r) for batch in sink.to_dicts() for r in batch]
 
-        # window_end=10:01: o1,o2,o3 join → electronics $500 (2 orders), clothing $50 (1 order)
-        # window_end=10:02: o4 joins → electronics $200 (1 order)
         electronics = [r for r in all_results if r["category"] == "electronics"]
         clothing = [r for r in all_results if r["category"] == "clothing"]
 

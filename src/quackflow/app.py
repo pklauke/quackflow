@@ -5,7 +5,6 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from quackflow.schema import Schema
-from quackflow.source import Source
 
 
 @dataclass
@@ -14,14 +13,13 @@ class DataPacket:
     watermark: dt.datetime
 
 
-class SourceBinding:
-    def __init__(self, name: str, source: Source, schema: type[Schema]):
+class SourceDeclaration:
+    def __init__(self, name: str, schema: type[Schema]):
         self.name = name
-        self.source = source
         self.schema = schema
 
 
-class ViewBinding:
+class ViewDeclaration:
     def __init__(self, name: str, sql: str, depends_on: list[str], materialize: bool = False):
         self.name = name
         self.sql = sql
@@ -32,9 +30,9 @@ class ViewBinding:
 SECONDS_PER_DAY = 86400
 
 
-class OutputBinding:
-    def __init__(self, sink: typing.Any, sql: str, schema: type[Schema], depends_on: list[str]):
-        self.sink = sink
+class OutputDeclaration:
+    def __init__(self, name: str, sql: str, schema: type[Schema], depends_on: list[str]):
+        self.name = name
         self.sql = sql
         self.schema = schema
         self.depends_on = depends_on
@@ -45,7 +43,7 @@ class OutputBinding:
         self,
         window: dt.timedelta | None = None,
         records: int | None = None,
-    ) -> "OutputBinding":
+    ) -> "OutputDeclaration":
         if window is not None:
             window_seconds = int(window.total_seconds())
             if window_seconds <= 0:
@@ -59,12 +57,14 @@ class OutputBinding:
 
 OnAdvanceCallback = typing.Callable[[], typing.Awaitable[None]]
 
+Declaration = SourceDeclaration | ViewDeclaration | OutputDeclaration
+
 
 class Node:
-    def __init__(self, name: str, node_type: str, binding: SourceBinding | ViewBinding | OutputBinding):
+    def __init__(self, name: str, node_type: str, declaration: Declaration):
         self.name = name
         self.node_type = node_type
-        self.binding = binding
+        self.declaration = declaration
         self.upstream: list[Node] = []
         self.downstream: list[Node] = []
         self._watermark: dt.datetime | None = None  # For source nodes
@@ -144,57 +144,51 @@ class DAG:
 
 class Quackflow:
     def __init__(self):
-        self.sources: dict[str, SourceBinding] = {}
-        self.views: dict[str, ViewBinding] = {}
-        self.outputs: list[OutputBinding] = []
+        self.sources: dict[str, SourceDeclaration] = {}
+        self.views: dict[str, ViewDeclaration] = {}
+        self.outputs: dict[str, OutputDeclaration] = {}
 
-    def source(
-        self,
-        name: str,
-        source: Source,
-        *,
-        schema: type[Schema],
-    ) -> None:
-        self.sources[name] = SourceBinding(name, source, schema)
+    def source(self, name: str, *, schema: type[Schema]) -> None:
+        self.sources[name] = SourceDeclaration(name, schema)
 
     def view(self, name: str, sql: str, *, depends_on: list[str], materialize: bool = False) -> None:
-        self.views[name] = ViewBinding(name, sql, depends_on, materialize)
+        self.views[name] = ViewDeclaration(name, sql, depends_on, materialize)
 
     def output(
         self,
-        sink: typing.Any,
+        name: str,
         sql: str,
         *,
         schema: type[Schema],
         depends_on: list[str],
-    ) -> OutputBinding:
-        binding = OutputBinding(sink, sql, schema, depends_on)
-        self.outputs.append(binding)
-        return binding
+    ) -> OutputDeclaration:
+        declaration = OutputDeclaration(name, sql, schema, depends_on)
+        self.outputs[name] = declaration
+        return declaration
 
     def compile(self) -> DAG:
-        for binding in self.outputs:
-            if binding.trigger_window is None and binding.trigger_records is None:
+        for declaration in self.outputs.values():
+            if declaration.trigger_window is None and declaration.trigger_records is None:
                 raise ValueError("All outputs must have a trigger (window or records)")
 
         dag = DAG()
 
-        for name, binding in self.sources.items():
-            node = Node(name, "source", binding)
+        for name, declaration in self.sources.items():
+            node = Node(name, "source", declaration)
             dag.add_node(node)
 
-        for name, binding in self.views.items():
-            node = Node(name, "view", binding)
+        for name, declaration in self.views.items():
+            node = Node(name, "view", declaration)
             dag.add_node(node)
 
-            for dep_name in binding.depends_on:
+            for dep_name in declaration.depends_on:
                 dag.connect(dep_name, name)
 
-        for i, binding in enumerate(self.outputs):
-            node = Node(f"output_{i}", "output", binding)
+        for name, declaration in self.outputs.items():
+            node = Node(name, "output", declaration)
             dag.add_node(node)
 
-            for dep_name in binding.depends_on:
-                dag.connect(dep_name, f"output_{i}")
+            for dep_name in declaration.depends_on:
+                dag.connect(dep_name, name)
 
         return dag
