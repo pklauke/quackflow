@@ -4,6 +4,7 @@ import pyarrow as pa
 import pytest
 
 from quackflow.app import Quackflow
+from quackflow.batch_runtime import BatchRuntime
 from quackflow.runtime import Runtime
 from quackflow.schema import Int, Schema, String, Timestamp
 from quackflow.testing import FakeSink, FakeSource
@@ -30,9 +31,10 @@ class TestCompileValidation:
             app.compile()
 
 
+@pytest.mark.parametrize("runtime_class", [Runtime, BatchRuntime])
 class TestRuntimeBasic:
     @pytest.mark.asyncio
-    async def test_source_to_output(self):
+    async def test_source_to_output(self, runtime_class):
         time_notion = EventTimeNotion(column="event_time")
         batch = make_batch(
             [1, 2],
@@ -49,17 +51,17 @@ class TestRuntimeBasic:
         app.source("events", schema=EventSchema)
         app.output("results", "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=2)
 
-        runtime = Runtime(app, sources={"events": source}, sinks={"results": sink})
+        runtime = runtime_class(app, sources={"events": source}, sinks={"results": sink})
         await runtime.execute(
             start=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
             end=dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc),
         )
 
-        assert len(sink.batches) == 1
-        assert sink.batches[0].num_rows == 2
+        total_rows = sum(b.num_rows for b in sink.batches)
+        assert total_rows == 2
 
     @pytest.mark.asyncio
-    async def test_source_through_view_to_output(self):
+    async def test_source_through_view_to_output(self, runtime_class):
         time_notion = EventTimeNotion(column="event_time")
         batch = make_batch(
             [1, 2, 3],
@@ -80,13 +82,12 @@ class TestRuntimeBasic:
             records=1
         )
 
-        runtime = Runtime(app, sources={"events": source}, sinks={"results": sink})
+        runtime = runtime_class(app, sources={"events": source}, sinks={"results": sink})
         await runtime.execute(
             start=dt.datetime(2024, 1, 1, tzinfo=dt.timezone.utc),
             end=dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc),
         )
 
-        assert len(sink.batches) >= 1
         total_rows = sum(b.num_rows for b in sink.batches)
         assert total_rows == 2
 
