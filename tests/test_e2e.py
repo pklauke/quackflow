@@ -81,7 +81,6 @@ class TestGeospatialAggregation:
             FROM user_locations
             QUALIFY row_num = 1
             """,
-            depends_on=["user_locations"],
         )
 
         app.output(
@@ -97,7 +96,6 @@ class TestGeospatialAggregation:
             GROUP BY window_start, window_end, country, location_bucket
             """,
             schema=LocationAggSchema,
-            depends_on=["location_buckets"],
         ).trigger(window=dt.timedelta(minutes=1))
 
         runtime = Runtime(
@@ -197,7 +195,6 @@ class TestJoinWithMultipleSources:
             SELECT order_id, product_id, quantity, window_end
             FROM hopping_window('orders', 'event_time', INTERVAL '1 minute', INTERVAL '1 minute')
             """,
-            depends_on=["orders"],
         )
 
         app.view(
@@ -206,7 +203,6 @@ class TestJoinWithMultipleSources:
             SELECT product_id, category, price, window_end
             FROM hopping_window('products', 'event_time', INTERVAL '2 minutes', INTERVAL '1 minute')
             """,
-            depends_on=["products"],
         )
 
         app.view(
@@ -225,7 +221,6 @@ class TestJoinWithMultipleSources:
               ON o.product_id = p.product_id
              AND o.window_end = p.window_end
             """,
-            depends_on=["orders_windowed", "products_windowed"],
         )
 
         app.output(
@@ -240,7 +235,6 @@ class TestJoinWithMultipleSources:
             GROUP BY window_end, category
             """,
             schema=RevenueAggSchema,
-            depends_on=["orders_with_products"],
         ).trigger(window=dt.timedelta(minutes=1))
 
         runtime = Runtime(

@@ -29,16 +29,16 @@ class TestQuackflowRegistration:
         app = Quackflow()
         app.source("events", schema=EventSchema)
 
-        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
+        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id")
 
         assert "user_counts" in app.views
 
     def test_register_output(self):
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
+        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id")
 
-        app.output("results", "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"])
+        app.output("results", "SELECT * FROM user_counts", schema=OutputSchema)
 
         assert "results" in app.outputs
 
@@ -48,7 +48,7 @@ class TestQuackflowTrigger:
         app = Quackflow()
         app.source("events", schema=EventSchema)
 
-        app.output("results", "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(
+        app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(
             window=dt.timedelta(minutes=5)
         )
 
@@ -58,7 +58,7 @@ class TestQuackflowTrigger:
         app = Quackflow()
         app.source("events", schema=EventSchema)
 
-        app.output("results", "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=100)
+        app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(records=100)
 
         assert app.outputs["results"].trigger_records == 100
 
@@ -66,7 +66,7 @@ class TestQuackflowTrigger:
         app = Quackflow()
         app.source("events", schema=EventSchema)
 
-        app.output("results", "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(
+        app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(
             window=dt.timedelta(minutes=1), records=10000
         )
 
@@ -78,7 +78,7 @@ class TestQuackflowTrigger:
         app.source("events", schema=EventSchema)
 
         with pytest.raises(ValueError, match="divide evenly"):
-            app.output("results", "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(
+            app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(
                 window=dt.timedelta(seconds=7)
             )
 
@@ -87,8 +87,8 @@ class TestQuackflowDAG:
     def test_compile_creates_dag(self):
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
-        app.output("results", "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"]).trigger(
+        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id")
+        app.output("results", "SELECT * FROM user_counts", schema=OutputSchema).trigger(
             records=1
         )
 
@@ -100,8 +100,8 @@ class TestQuackflowDAG:
     def test_dag_has_correct_dependencies(self):
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id", depends_on=["events"])
-        app.output("results", "SELECT * FROM user_counts", schema=OutputSchema, depends_on=["user_counts"]).trigger(
+        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id")
+        app.output("results", "SELECT * FROM user_counts", schema=OutputSchema).trigger(
             records=1
         )
 
@@ -117,8 +117,8 @@ class TestQuackflowDAG:
     def test_dag_fan_out(self):
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.output("output1", "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=1)
-        app.output("output2", "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=1)
+        app.output("output1", "SELECT * FROM events", schema=EventSchema).trigger(records=1)
+        app.output("output2", "SELECT * FROM events", schema=EventSchema).trigger(records=1)
 
         dag = app.compile()
 
@@ -138,9 +138,8 @@ class TestQuackflowDAG:
         app.view(
             "joined",
             "SELECT * FROM events JOIN users ON events.user_id = users.user_id",
-            depends_on=["events", "users"],
         )
-        app.output("results", "SELECT * FROM joined", schema=EventSchema, depends_on=["joined"]).trigger(records=1)
+        app.output("results", "SELECT * FROM joined", schema=EventSchema).trigger(records=1)
 
         dag = app.compile()
 

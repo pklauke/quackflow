@@ -25,7 +25,7 @@ class TestCompileValidation:
     def test_output_without_trigger_raises(self):
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.output("results", "SELECT * FROM events", schema=EventSchema, depends_on=["events"])
+        app.output("results", "SELECT * FROM events", schema=EventSchema)
 
         with pytest.raises(ValueError, match="trigger"):
             app.compile()
@@ -49,7 +49,7 @@ class TestRuntimeBasic:
 
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.output("results", "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=2)
+        app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(records=2)
 
         runtime = runtime_class(app, sources={"events": source}, sinks={"results": sink})
         await runtime.execute(
@@ -77,8 +77,8 @@ class TestRuntimeBasic:
 
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.view("alice_events", "SELECT * FROM events WHERE user_id = 'alice'", depends_on=["events"])
-        app.output("results", "SELECT * FROM alice_events", schema=EventSchema, depends_on=["alice_events"]).trigger(
+        app.view("alice_events", "SELECT * FROM events WHERE user_id = 'alice'")
+        app.output("results", "SELECT * FROM alice_events", schema=EventSchema).trigger(
             records=1
         )
 
@@ -103,7 +103,7 @@ class TestRuntimeTriggers:
 
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.output("results", "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=2)
+        app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(records=2)
 
         runtime = Runtime(app, sources={"events": source}, sinks={"results": sink})
         await runtime.execute(
@@ -131,7 +131,7 @@ class TestRuntimeTriggers:
 
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.output("results", "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(
+        app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(
             window=dt.timedelta(minutes=30)
         )
 
@@ -156,8 +156,8 @@ class TestRuntimeMultipleOutputs:
 
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.output("output1", "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=1)
-        app.output("output2", "SELECT * FROM events", schema=EventSchema, depends_on=["events"]).trigger(records=2)
+        app.output("output1", "SELECT * FROM events", schema=EventSchema).trigger(records=1)
+        app.output("output2", "SELECT * FROM events", schema=EventSchema).trigger(records=2)
 
         runtime = Runtime(app, sources={"events": source}, sinks={"output1": sink1, "output2": sink2})
         await runtime.execute(

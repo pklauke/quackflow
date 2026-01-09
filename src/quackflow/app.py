@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from quackflow.schema import Schema
+from quackflow.sql import extract_tables
 
 
 @dataclass
@@ -150,7 +151,8 @@ class Quackflow:
     def source(self, name: str, *, schema: type[Schema]) -> None:
         self.sources[name] = SourceDeclaration(name, schema)
 
-    def view(self, name: str, sql: str, *, depends_on: list[str]) -> None:
+    def view(self, name: str, sql: str) -> None:
+        depends_on = self._resolve_dependencies(sql)
         self.views[name] = ViewDeclaration(name, sql, depends_on)
 
     def output(
@@ -159,11 +161,16 @@ class Quackflow:
         sql: str,
         *,
         schema: type[Schema],
-        depends_on: list[str],
     ) -> OutputDeclaration:
+        depends_on = self._resolve_dependencies(sql)
         declaration = OutputDeclaration(name, sql, schema, depends_on)
         self.outputs[name] = declaration
         return declaration
+
+    def _resolve_dependencies(self, sql: str) -> list[str]:
+        referenced = extract_tables(sql)
+        known = set(self.sources.keys()) | set(self.views.keys())
+        return list(referenced & known)
 
     def compile(self) -> DAG:
         for declaration in self.outputs.values():
