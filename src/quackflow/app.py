@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from quackflow.schema import Schema
-from quackflow.sql import extract_hop_window_sizes, extract_tables
+from quackflow.sql import extract_hop_sources, extract_hop_window_sizes, extract_tables
 
 
 @dataclass
@@ -18,13 +18,15 @@ class SourceDeclaration:
     def __init__(self, name: str, schema: type[Schema]):
         self.name = name
         self.schema = schema
+        self.ts_col: str | None = None  # Set during compile from HOP calls
 
 
 class ViewDeclaration:
-    def __init__(self, name: str, sql: str, depends_on: list[str]):
+    def __init__(self, name: str, sql: str, depends_on: list[str], window_sizes: list[dt.timedelta]):
         self.name = name
         self.sql = sql
         self.depends_on = depends_on
+        self.window_sizes = window_sizes
 
 
 SECONDS_PER_DAY = 86400
@@ -74,10 +76,14 @@ class Node:
         self._upstream_watermarks: dict[str, dt.datetime] = {}  # For view/output nodes
         self._upstream_records: dict[str, int] = {}  # Records received per upstream
         self._on_advance: OnAdvanceCallback | None = None
+        self._on_expiration: OnAdvanceCallback | None = None
+        self._downstream_thresholds: dict[str, dt.datetime] = {}
 
     def set_on_advance_callback(self, callback: OnAdvanceCallback) -> None:
-        """Register a callback to be called when effective watermark advances."""
         self._on_advance = callback
+
+    def set_on_expiration_callback(self, callback: OnAdvanceCallback) -> None:
+        self._on_expiration = callback
 
     @property
     def effective_watermark(self) -> dt.datetime | None:
@@ -119,6 +125,31 @@ class Node:
         for downstream in self.downstream:
             await downstream.receive(self.name, packet)
 
+    @property
+    def expiration_threshold(self) -> dt.datetime | None:
+        if len(self._downstream_thresholds) < len(self.downstream):
+            return None
+        return min(self._downstream_thresholds.values())
+
+    async def receive_expiration_threshold(self, downstream_name: str, threshold: dt.datetime) -> None:
+        old_threshold = self.expiration_threshold
+        self._downstream_thresholds[downstream_name] = threshold
+        new_threshold = self.expiration_threshold
+
+        if new_threshold is not None and (old_threshold is None or new_threshold > old_threshold):
+            if self._on_expiration is not None:
+                await self._on_expiration()
+            await self._propagate_expiration_upstream(new_threshold)
+
+    async def _propagate_expiration_upstream(self, threshold: dt.datetime) -> None:
+        adjusted = threshold
+        if self.node_type == "view":
+            decl: ViewDeclaration = self.declaration  # type: ignore[assignment]
+            if decl.window_sizes:
+                adjusted = threshold - max(decl.window_sizes)
+        for upstream in self.upstream:
+            await upstream.receive_expiration_threshold(self.name, adjusted)
+
 
 class DAG:
     def __init__(self):
@@ -156,7 +187,8 @@ class Quackflow:
 
     def view(self, name: str, sql: str) -> None:
         depends_on = self._resolve_dependencies(sql)
-        self.views[name] = ViewDeclaration(name, sql, depends_on)
+        window_sizes = extract_hop_window_sizes(sql)
+        self.views[name] = ViewDeclaration(name, sql, depends_on, window_sizes)
 
     def output(
         self,
@@ -176,6 +208,20 @@ class Quackflow:
         known = set(self.sources.keys()) | set(self.views.keys())
         return list(referenced & known)
 
+    def _set_source_ts_cols(self) -> None:
+        """Extract ts_col from HOP calls and set on source declarations."""
+        for output in self.outputs.values():
+            hop_sources = extract_hop_sources(output.sql)
+            for source_name, (ts_col, _) in hop_sources.items():
+                if source_name in self.sources:
+                    self.sources[source_name].ts_col = ts_col
+
+        for view in self.views.values():
+            hop_sources = extract_hop_sources(view.sql)
+            for source_name, (ts_col, _) in hop_sources.items():
+                if source_name in self.sources:
+                    self.sources[source_name].ts_col = ts_col
+
     def compile(self) -> DAG:
         for declaration in self.outputs.values():
             if declaration.trigger_window is None and declaration.trigger_records is None:
@@ -189,6 +235,8 @@ class Quackflow:
                         raise ValueError(
                             f"Window size ({size_seconds}s) must be a multiple of trigger window ({hop_seconds}s)"
                         )
+
+        self._set_source_ts_cols()
 
         dag = DAG()
 

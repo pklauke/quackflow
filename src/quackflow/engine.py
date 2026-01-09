@@ -34,3 +34,8 @@ class Engine:
             {col: result.column(col).combine_chunks() for col in result.column_names},
             schema=result.schema,
         )
+
+    def delete_before(self, table_name: str, ts_col: str, threshold: dt.datetime) -> int:
+        result = self._conn.execute(f"DELETE FROM {table_name} WHERE {ts_col} < $1::TIMESTAMP", [threshold])
+        row = result.fetchone()
+        return row[0] if row else 0

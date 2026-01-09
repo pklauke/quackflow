@@ -64,14 +64,32 @@ class OutputStep:
             self._engine.set_window_hop(self._declaration.trigger_window)
         result = self._engine.query(self._declaration.sql)
         await self._sink.write(result)
+        await self._propagate_expiration()
+
+    async def _propagate_expiration(self) -> None:
+        if self._last_fired_window is None:
+            return
+
+        max_window = max(self._declaration.window_sizes, default=dt.timedelta(0))
+        threshold = self._last_fired_window - max_window
+
+        for upstream in self._node.upstream:
+            await upstream.receive_expiration_threshold(self._node.name, threshold)
 
 
 class ImportStep:
     def __init__(self, node: Node, source: Source, engine: Engine, source_stopped: dict[str, bool]):
         self._node = node
+        self._declaration: SourceDeclaration = node.declaration  # type: ignore[assignment]
         self._source = source
         self._engine = engine
         self._source_stopped = source_stopped
+
+    async def on_expiration(self) -> None:
+        threshold = self._node.expiration_threshold
+        ts_col = self._declaration.ts_col
+        if threshold is not None and ts_col is not None:
+            self._engine.delete_before(self._node.name, ts_col, threshold)
 
     async def run(self, start: dt.datetime, end: dt.datetime | None) -> None:
         source = self._source
@@ -140,6 +158,7 @@ class Runtime:
         for node in dag.source_nodes():
             source = self._sources[node.name]
             step = ImportStep(node, source, self._engine, source_stopped)
+            node.set_on_expiration_callback(step.on_expiration)
             import_steps.append(step)
 
         tasks = [asyncio.create_task(step.run(start, end)) for step in import_steps]

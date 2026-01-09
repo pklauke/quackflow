@@ -20,6 +20,27 @@ def extract_hop_window_sizes(sql: str) -> list[dt.timedelta]:
     return sizes
 
 
+def extract_hop_sources(sql: str) -> dict[str, tuple[str, dt.timedelta]]:
+    """Extract {source_name: (ts_col, window_size)} from HOP calls."""
+    parsed = sqlglot.parse_one(sql, dialect="duckdb")
+    result: dict[str, tuple[str, dt.timedelta]] = {}
+
+    for func in parsed.find_all(exp.Anonymous):
+        if func.name.upper() == "HOP" and len(func.expressions) >= 3:
+            source_arg = func.expressions[0]
+            ts_col_arg = func.expressions[1]
+            size_arg = func.expressions[2]
+
+            if isinstance(source_arg, exp.Literal) and source_arg.is_string:
+                source_name = source_arg.this
+                ts_col = ts_col_arg.this if isinstance(ts_col_arg, exp.Literal) else None
+                size = _interval_to_timedelta(size_arg) if isinstance(size_arg, exp.Interval) else None
+                if ts_col and size:
+                    result[source_name] = (ts_col, size)
+
+    return result
+
+
 def _interval_to_timedelta(interval: exp.Interval) -> dt.timedelta | None:
     """Convert sqlglot Interval to timedelta."""
     unit = interval.unit
