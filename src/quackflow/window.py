@@ -3,7 +3,7 @@ import duckdb
 
 def register_window_functions_streaming(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("""
-        CREATE OR REPLACE FUNCTION hopping_window(tbl, ts_col, size, hop) AS TABLE
+        CREATE OR REPLACE FUNCTION HOP(tbl, ts_col, size) AS TABLE
         SELECT
             t.*,
             getvariable('__window_end')::TIMESTAMP - size AS window_start,
@@ -13,15 +13,10 @@ def register_window_functions_streaming(conn: duckdb.DuckDBPyConnection) -> None
           AND t[ts_col] < getvariable('__window_end')::TIMESTAMP
     """)
 
-    conn.execute("""
-        CREATE OR REPLACE FUNCTION tumbling_window(tbl, ts_col, size) AS TABLE
-        SELECT * FROM hopping_window(tbl, ts_col, size, size)
-    """)
-
 
 def register_window_functions_batch(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("""
-        CREATE OR REPLACE FUNCTION hopping_window(tbl, ts_col, size, hop) AS TABLE
+        CREATE OR REPLACE FUNCTION HOP(tbl, ts_col, size) AS TABLE
         WITH __windows AS (
             SELECT
                 ws AS window_start,
@@ -29,7 +24,7 @@ def register_window_functions_batch(conn: duckdb.DuckDBPyConnection) -> None:
             FROM generate_series(
                 getvariable('__batch_start')::TIMESTAMP,
                 getvariable('__batch_end')::TIMESTAMP - size,
-                hop
+                getvariable('__window_hop')::INTERVAL
             ) AS t(ws)
         )
         SELECT
@@ -40,9 +35,4 @@ def register_window_functions_batch(conn: duckdb.DuckDBPyConnection) -> None:
         JOIN __windows w
             ON t[ts_col] >= w.window_start
             AND t[ts_col] < w.window_end
-    """)
-
-    conn.execute("""
-        CREATE OR REPLACE FUNCTION tumbling_window(tbl, ts_col, size) AS TABLE
-        SELECT * FROM hopping_window(tbl, ts_col, size, size)
     """)

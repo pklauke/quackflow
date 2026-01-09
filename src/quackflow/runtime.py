@@ -61,6 +61,7 @@ class OutputStep:
             window_seconds = int(self._declaration.trigger_window.total_seconds())
             self._last_fired_window = self._last_fired_window + dt.timedelta(seconds=window_seconds)
             self._engine.set_window_end(self._last_fired_window)
+            self._engine.set_window_hop(self._declaration.trigger_window)
         result = self._engine.query(self._declaration.sql)
         await self._sink.write(result)
 

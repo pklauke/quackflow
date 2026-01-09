@@ -25,6 +25,9 @@ class Engine:
     def set_window_end(self, window_end: dt.datetime) -> None:
         self._conn.execute("SET VARIABLE __window_end = $1::TIMESTAMP", [window_end])
 
+    def set_window_hop(self, hop: dt.timedelta) -> None:
+        self._conn.execute("SET VARIABLE __window_hop = $1::INTERVAL", [hop])
+
     def query(self, sql: str) -> pa.RecordBatch:
         result = self._conn.execute(sql).fetch_arrow_table()
         return pa.RecordBatch.from_pydict(

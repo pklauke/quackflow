@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from quackflow.schema import Schema
-from quackflow.sql import extract_tables
+from quackflow.sql import extract_hop_window_sizes, extract_tables
 
 
 @dataclass
@@ -31,11 +31,14 @@ SECONDS_PER_DAY = 86400
 
 
 class OutputDeclaration:
-    def __init__(self, name: str, sql: str, schema: type[Schema], depends_on: list[str]):
+    def __init__(
+        self, name: str, sql: str, schema: type[Schema], depends_on: list[str], window_sizes: list[dt.timedelta]
+    ):
         self.name = name
         self.sql = sql
         self.schema = schema
         self.depends_on = depends_on
+        self.window_sizes = window_sizes
         self.trigger_window: dt.timedelta | None = None
         self.trigger_records: int | None = None
 
@@ -163,7 +166,8 @@ class Quackflow:
         schema: type[Schema],
     ) -> OutputDeclaration:
         depends_on = self._resolve_dependencies(sql)
-        declaration = OutputDeclaration(name, sql, schema, depends_on)
+        window_sizes = extract_hop_window_sizes(sql)
+        declaration = OutputDeclaration(name, sql, schema, depends_on, window_sizes)
         self.outputs[name] = declaration
         return declaration
 
@@ -176,6 +180,15 @@ class Quackflow:
         for declaration in self.outputs.values():
             if declaration.trigger_window is None and declaration.trigger_records is None:
                 raise ValueError("All outputs must have a trigger (window or records)")
+
+            if declaration.trigger_window is not None and declaration.window_sizes:
+                hop_seconds = int(declaration.trigger_window.total_seconds())
+                for window_size in declaration.window_sizes:
+                    size_seconds = int(window_size.total_seconds())
+                    if size_seconds % hop_seconds != 0:
+                        raise ValueError(
+                            f"Window size ({size_seconds}s) must be a multiple of trigger window ({hop_seconds}s)"
+                        )
 
         dag = DAG()
 

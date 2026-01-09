@@ -48,9 +48,7 @@ class TestQuackflowTrigger:
         app = Quackflow()
         app.source("events", schema=EventSchema)
 
-        app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(
-            window=dt.timedelta(minutes=5)
-        )
+        app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(window=dt.timedelta(minutes=5))
 
         assert app.outputs["results"].trigger_window == dt.timedelta(minutes=5)
 
@@ -78,9 +76,31 @@ class TestQuackflowTrigger:
         app.source("events", schema=EventSchema)
 
         with pytest.raises(ValueError, match="divide evenly"):
-            app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(
-                window=dt.timedelta(seconds=7)
-            )
+            app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(window=dt.timedelta(seconds=7))
+
+    def test_hop_window_size_must_be_multiple_of_trigger(self):
+        app = Quackflow()
+        app.source("events", schema=EventSchema)
+        app.output(
+            "results",
+            "SELECT * FROM HOP('events', 'event_time', INTERVAL '10 minutes')",
+            schema=EventSchema,
+        ).trigger(window=dt.timedelta(minutes=3))
+
+        with pytest.raises(ValueError, match="must be a multiple"):
+            app.compile()
+
+    def test_hop_window_size_valid_when_multiple(self):
+        app = Quackflow()
+        app.source("events", schema=EventSchema)
+        app.output(
+            "results",
+            "SELECT * FROM HOP('events', 'event_time', INTERVAL '10 minutes')",
+            schema=EventSchema,
+        ).trigger(window=dt.timedelta(minutes=5))
+
+        dag = app.compile()
+        assert dag is not None
 
 
 class TestQuackflowDAG:
@@ -88,9 +108,7 @@ class TestQuackflowDAG:
         app = Quackflow()
         app.source("events", schema=EventSchema)
         app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id")
-        app.output("results", "SELECT * FROM user_counts", schema=OutputSchema).trigger(
-            records=1
-        )
+        app.output("results", "SELECT * FROM user_counts", schema=OutputSchema).trigger(records=1)
 
         dag = app.compile()
 
@@ -101,9 +119,7 @@ class TestQuackflowDAG:
         app = Quackflow()
         app.source("events", schema=EventSchema)
         app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id")
-        app.output("results", "SELECT * FROM user_counts", schema=OutputSchema).trigger(
-            records=1
-        )
+        app.output("results", "SELECT * FROM user_counts", schema=OutputSchema).trigger(records=1)
 
         dag = app.compile()
 

@@ -21,18 +21,14 @@ class TestExtractTables:
         """
         assert extract_tables(sql) == {"orders", "filtered"}
 
-    def test_hopping_window(self):
-        sql = "SELECT * FROM hopping_window('events', 'ts', INTERVAL '1 minute', INTERVAL '1 minute')"
-        assert extract_tables(sql) == {"events"}
-
-    def test_tumbling_window(self):
-        sql = "SELECT * FROM tumbling_window('events', 'ts', INTERVAL '1 minute')"
+    def test_window_function(self):
+        sql = "SELECT * FROM HOP('events', 'ts', INTERVAL '1 minute')"
         assert extract_tables(sql) == {"events"}
 
     def test_window_with_aggregation(self):
         sql = """
             SELECT window_start, COUNT(*) as cnt
-            FROM hopping_window('orders', 'event_time', INTERVAL '10 minutes', INTERVAL '5 minutes')
+            FROM HOP('orders', 'event_time', INTERVAL '10 minutes')
             GROUP BY window_start
         """
         assert extract_tables(sql) == {"orders"}
@@ -40,7 +36,7 @@ class TestExtractTables:
     def test_multiple_tables_and_window(self):
         sql = """
             SELECT o.*, p.name
-            FROM hopping_window('orders', 'ts', INTERVAL '1 minute', INTERVAL '1 minute') o
+            FROM HOP('orders', 'ts', INTERVAL '1 minute') o
             JOIN products p ON o.product_id = p.id
         """
         assert extract_tables(sql) == {"orders", "products"}

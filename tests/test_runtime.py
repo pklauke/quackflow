@@ -78,9 +78,7 @@ class TestRuntimeBasic:
         app = Quackflow()
         app.source("events", schema=EventSchema)
         app.view("alice_events", "SELECT * FROM events WHERE user_id = 'alice'")
-        app.output("results", "SELECT * FROM alice_events", schema=EventSchema).trigger(
-            records=1
-        )
+        app.output("results", "SELECT * FROM alice_events", schema=EventSchema).trigger(records=1)
 
         runtime = runtime_class(app, sources={"events": source}, sinks={"results": sink})
         await runtime.execute(
@@ -131,9 +129,7 @@ class TestRuntimeTriggers:
 
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(
-            window=dt.timedelta(minutes=30)
-        )
+        app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(window=dt.timedelta(minutes=30))
 
         runtime = Runtime(app, sources={"events": source}, sinks={"results": sink})
         await runtime.execute(

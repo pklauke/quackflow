@@ -28,14 +28,14 @@ def conn():
     return conn
 
 
-class TestTumblingWindowStreaming:
+class TestWindowStreaming:
     def test_filters_to_current_window(self, conn):
         register_window_functions_streaming(conn)
         conn.execute("SET VARIABLE __window_end = TIMESTAMP '2024-01-01 10:10:00'")
 
         result = conn.execute("""
             SELECT id, window_start, window_end
-            FROM tumbling_window('events', 'event_time', INTERVAL '10 minutes')
+            FROM HOP('events', 'event_time', INTERVAL '10 minutes')
             ORDER BY id
         """).fetchall()
 
@@ -50,12 +50,12 @@ class TestTumblingWindowStreaming:
         conn.execute("SET VARIABLE __window_end = TIMESTAMP '2024-01-01 10:20:00'")
 
         result_10min = conn.execute("""
-            SELECT id FROM tumbling_window('events', 'event_time', INTERVAL '10 minutes')
+            SELECT id FROM HOP('events', 'event_time', INTERVAL '10 minutes')
             ORDER BY id
         """).fetchall()
 
         result_5min = conn.execute("""
-            SELECT id FROM tumbling_window('events', 'event_time', INTERVAL '5 minutes')
+            SELECT id FROM HOP('events', 'event_time', INTERVAL '5 minutes')
             ORDER BY id
         """).fetchall()
 
@@ -68,7 +68,7 @@ class TestTumblingWindowStreaming:
         conn.execute("SET VARIABLE __window_end = TIMESTAMP '2024-01-01 10:10:00'")
 
         result = conn.execute("""
-            SELECT id FROM tumbling_window('events', 'event_time', INTERVAL '10 minutes')
+            SELECT id FROM HOP('events', 'event_time', INTERVAL '10 minutes')
             WHERE id = 99
         """).fetchall()
 
@@ -80,7 +80,7 @@ class TestTumblingWindowStreaming:
 
         result = conn.execute("""
             SELECT window_start, window_end, user_id, COUNT(*) as cnt
-            FROM tumbling_window('events', 'event_time', INTERVAL '10 minutes')
+            FROM HOP('events', 'event_time', INTERVAL '10 minutes')
             GROUP BY window_start, window_end, user_id
             ORDER BY user_id
         """).fetchall()
@@ -90,47 +90,31 @@ class TestTumblingWindowStreaming:
         assert result[1][2] == "bob" and result[1][3] == 1
 
 
-class TestHoppingWindowStreaming:
-    def test_filters_to_current_window(self, conn):
-        register_window_functions_streaming(conn)
-        conn.execute("SET VARIABLE __window_end = TIMESTAMP '2024-01-01 10:10:00'")
-
-        result = conn.execute("""
-            SELECT id, window_start, window_end
-            FROM hopping_window('events', 'event_time', INTERVAL '10 minutes', INTERVAL '5 minutes')
-            ORDER BY id
-        """).fetchall()
-
-        assert len(result) == 2
-        assert result[0][0] == 1
-        assert result[1][0] == 2
-        assert result[0][1] == dt.datetime(2024, 1, 1, 10, 0)
-        assert result[0][2] == dt.datetime(2024, 1, 1, 10, 10)
-
-
-class TestTumblingWindowBatch:
-    def test_one_window_per_record(self, conn):
+class TestWindowBatch:
+    def test_tumbling_one_window_per_record(self, conn):
         register_window_functions_batch(conn)
         conn.execute("SET VARIABLE __batch_start = TIMESTAMP '2024-01-01 10:00:00'")
         conn.execute("SET VARIABLE __batch_end = TIMESTAMP '2024-01-01 10:30:00'")
+        conn.execute("SET VARIABLE __window_hop = INTERVAL '10 minutes'")
 
         result = conn.execute("""
             SELECT id, COUNT(*) as window_count
-            FROM tumbling_window('events', 'event_time', INTERVAL '10 minutes')
+            FROM HOP('events', 'event_time', INTERVAL '10 minutes')
             GROUP BY id
         """).fetchall()
 
         for row in result:
             assert row[1] == 1
 
-    def test_aggregation_per_window(self, conn):
+    def test_tumbling_aggregation_per_window(self, conn):
         register_window_functions_batch(conn)
         conn.execute("SET VARIABLE __batch_start = TIMESTAMP '2024-01-01 10:00:00'")
         conn.execute("SET VARIABLE __batch_end = TIMESTAMP '2024-01-01 10:30:00'")
+        conn.execute("SET VARIABLE __window_hop = INTERVAL '10 minutes'")
 
         result = conn.execute("""
             SELECT window_start, window_end, COUNT(*) as cnt
-            FROM tumbling_window('events', 'event_time', INTERVAL '10 minutes')
+            FROM HOP('events', 'event_time', INTERVAL '10 minutes')
             GROUP BY window_start, window_end
             ORDER BY window_start
         """).fetchall()
@@ -140,16 +124,15 @@ class TestTumblingWindowBatch:
         assert result[1][2] == 2
         assert result[2][2] == 1
 
-
-class TestHoppingWindowBatch:
-    def test_expands_records_into_windows(self, conn):
+    def test_hopping_expands_records_into_windows(self, conn):
         register_window_functions_batch(conn)
         conn.execute("SET VARIABLE __batch_start = TIMESTAMP '2024-01-01 10:00:00'")
         conn.execute("SET VARIABLE __batch_end = TIMESTAMP '2024-01-01 10:30:00'")
+        conn.execute("SET VARIABLE __window_hop = INTERVAL '5 minutes'")
 
         result = conn.execute("""
             SELECT id, window_start, window_end
-            FROM hopping_window('events', 'event_time', INTERVAL '10 minutes', INTERVAL '5 minutes')
+            FROM HOP('events', 'event_time', INTERVAL '10 minutes')
             WHERE id = 2
             ORDER BY window_start
         """).fetchall()
@@ -164,22 +147,23 @@ class TestHoppingWindowBatch:
 class TestBatchStreamingEquivalence:
     def test_tumbling_window_equivalence(self, conn):
         size = dt.timedelta(minutes=10)
+        hop = size
         batch_start = dt.datetime(2024, 1, 1, 10, 0)
         batch_end = dt.datetime(2024, 1, 1, 10, 30)
 
         register_window_functions_batch(conn)
         conn.execute(f"SET VARIABLE __batch_start = TIMESTAMP '{batch_start}'")
         conn.execute(f"SET VARIABLE __batch_end = TIMESTAMP '{batch_end}'")
+        conn.execute("SET VARIABLE __window_hop = INTERVAL '10 minutes'")
 
         batch_result = conn.execute("""
             SELECT window_start, window_end, user_id, COUNT(*) as cnt
-            FROM tumbling_window('events', 'event_time', INTERVAL '10 minutes')
+            FROM HOP('events', 'event_time', INTERVAL '10 minutes')
             GROUP BY window_start, window_end, user_id
             ORDER BY window_start, user_id
         """).fetchall()
 
-        conn.execute("DROP FUNCTION tumbling_window")
-        conn.execute("DROP FUNCTION hopping_window")
+        conn.execute("DROP FUNCTION HOP")
         register_window_functions_streaming(conn)
 
         streaming_results = []
@@ -189,12 +173,12 @@ class TestBatchStreamingEquivalence:
 
             window_result = conn.execute("""
                 SELECT window_start, window_end, user_id, COUNT(*) as cnt
-                FROM tumbling_window('events', 'event_time', INTERVAL '10 minutes')
+                FROM HOP('events', 'event_time', INTERVAL '10 minutes')
                 GROUP BY window_start, window_end, user_id
                 ORDER BY user_id
             """).fetchall()
             streaming_results.extend(window_result)
-            window_end = window_end + size
+            window_end = window_end + hop
 
         streaming_results.sort(key=lambda x: (x[0], x[2]))
 
@@ -209,16 +193,16 @@ class TestBatchStreamingEquivalence:
         register_window_functions_batch(conn)
         conn.execute(f"SET VARIABLE __batch_start = TIMESTAMP '{batch_start}'")
         conn.execute(f"SET VARIABLE __batch_end = TIMESTAMP '{batch_end}'")
+        conn.execute("SET VARIABLE __window_hop = INTERVAL '5 minutes'")
 
         batch_result = conn.execute("""
             SELECT window_start, window_end, COUNT(*) as cnt
-            FROM hopping_window('events', 'event_time', INTERVAL '10 minutes', INTERVAL '5 minutes')
+            FROM HOP('events', 'event_time', INTERVAL '10 minutes')
             GROUP BY window_start, window_end
             ORDER BY window_start
         """).fetchall()
 
-        conn.execute("DROP FUNCTION tumbling_window")
-        conn.execute("DROP FUNCTION hopping_window")
+        conn.execute("DROP FUNCTION HOP")
         register_window_functions_streaming(conn)
 
         streaming_results = []
@@ -228,7 +212,7 @@ class TestBatchStreamingEquivalence:
 
             window_result = conn.execute("""
                 SELECT window_start, window_end, COUNT(*) as cnt
-                FROM hopping_window('events', 'event_time', INTERVAL '10 minutes', INTERVAL '5 minutes')
+                FROM HOP('events', 'event_time', INTERVAL '10 minutes')
                 GROUP BY window_start, window_end
             """).fetchall()
             streaming_results.extend(window_result)

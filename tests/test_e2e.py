@@ -46,7 +46,7 @@ def make_location_batch(
 
 class TestGeospatialAggregation:
     @pytest.mark.asyncio
-    async def test_location_aggregation_with_hopping_window(self):
+    async def test_location_aggregation_with_window(self):
         time_notion = EventTimeNotion(column="event_time")
 
         batch = make_location_batch(
@@ -92,7 +92,7 @@ class TestGeospatialAggregation:
                 country,
                 location_bucket,
                 COUNT(user_id) AS total_users
-            FROM hopping_window('location_buckets', 'event_time', INTERVAL '2 minutes', INTERVAL '1 minute')
+            FROM HOP('location_buckets', 'event_time', INTERVAL '2 minutes')
             GROUP BY window_start, window_end, country, location_bucket
             """,
             schema=LocationAggSchema,
@@ -193,7 +193,7 @@ class TestJoinWithMultipleSources:
             "orders_windowed",
             """
             SELECT order_id, product_id, quantity, window_end
-            FROM hopping_window('orders', 'event_time', INTERVAL '1 minute', INTERVAL '1 minute')
+            FROM HOP('orders', 'event_time', INTERVAL '1 minute')
             """,
         )
 
@@ -201,7 +201,7 @@ class TestJoinWithMultipleSources:
             "products_windowed",
             """
             SELECT product_id, category, price, window_end
-            FROM hopping_window('products', 'event_time', INTERVAL '2 minutes', INTERVAL '1 minute')
+            FROM HOP('products', 'event_time', INTERVAL '2 minutes')
             """,
         )
 

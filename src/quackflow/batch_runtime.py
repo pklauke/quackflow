@@ -1,7 +1,7 @@
 import datetime as dt
 import typing
 
-from quackflow.app import Quackflow, SourceDeclaration
+from quackflow.app import OutputDeclaration, Quackflow, SourceDeclaration
 from quackflow.engine import Engine
 from quackflow.source import Source
 from quackflow.window import register_window_functions_batch
@@ -47,6 +47,9 @@ class BatchRuntime:
                 self._engine.create_view(node.name, node.declaration.sql)  # type: ignore[union-attr]
 
         for node in dag.output_nodes():
-            result = self._engine.query(node.declaration.sql)  # type: ignore[union-attr]
+            declaration: OutputDeclaration = node.declaration  # type: ignore[assignment]
+            if declaration.trigger_window is not None:
+                self._engine.set_window_hop(declaration.trigger_window)
+            result = self._engine.query(declaration.sql)
             sink = self._sinks[node.name]
             await sink.write(result)
