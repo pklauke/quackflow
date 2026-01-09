@@ -102,6 +102,22 @@ class TestQuackflowTrigger:
         dag = app.compile()
         assert dag is not None
 
+    def test_stacked_aggregations_not_supported(self):
+        app = Quackflow()
+        app.source("events", schema=EventSchema)
+        app.view(
+            "minute_agg",
+            "SELECT user_id, COUNT(*) as cnt, window_end FROM HOP('events', 'event_time', INTERVAL '1 minute') GROUP BY user_id, window_end",
+        )
+        app.view(
+            "stacked",
+            "SELECT user_id, SUM(cnt), window_end FROM HOP('minute_agg', 'window_end', INTERVAL '5 minutes') GROUP BY user_id, window_end",
+        )
+        app.output("results", "SELECT * FROM stacked", schema=EventSchema).trigger(records=1)
+
+        with pytest.raises(ValueError, match="Stacked aggregations not supported"):
+            app.compile()
+
 
 class TestQuackflowDAG:
     def test_compile_creates_dag(self):

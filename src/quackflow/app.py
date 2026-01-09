@@ -222,6 +222,29 @@ class Quackflow:
                 if source_name in self.sources:
                     self.sources[source_name].ts_col = ts_col
 
+    def _check_stacked_aggregations(self) -> None:
+        for view in self.views.values():
+            hop_sources = extract_hop_sources(view.sql)
+            for source_name, (ts_col, _) in hop_sources.items():
+                if source_name in self.views and ts_col == "window_end":
+                    upstream_view = self.views[source_name]
+                    if upstream_view.window_sizes:
+                        raise ValueError(
+                            f"Stacked aggregations not supported: view '{view.name}' uses HOP on "
+                            f"'{source_name}.window_end', but '{source_name}' already contains a HOP"
+                        )
+
+        for output in self.outputs.values():
+            hop_sources = extract_hop_sources(output.sql)
+            for source_name, (ts_col, _) in hop_sources.items():
+                if source_name in self.views and ts_col == "window_end":
+                    upstream_view = self.views[source_name]
+                    if upstream_view.window_sizes:
+                        raise ValueError(
+                            f"Stacked aggregations not supported: output '{output.name}' uses HOP on "
+                            f"'{source_name}.window_end', but '{source_name}' already contains a HOP"
+                        )
+
     def compile(self) -> DAG:
         for declaration in self.outputs.values():
             if declaration.trigger_window is None and declaration.trigger_records is None:
@@ -237,6 +260,7 @@ class Quackflow:
                         )
 
         self._set_source_ts_cols()
+        self._check_stacked_aggregations()
 
         dag = DAG()
 
