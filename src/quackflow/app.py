@@ -20,11 +20,10 @@ class SourceDeclaration:
 
 
 class ViewDeclaration:
-    def __init__(self, name: str, sql: str, depends_on: list[str], materialize: bool = False):
+    def __init__(self, name: str, sql: str, depends_on: list[str]):
         self.name = name
         self.sql = sql
         self.depends_on = depends_on
-        self.materialize = materialize
 
 
 SECONDS_PER_DAY = 86400
@@ -151,8 +150,8 @@ class Quackflow:
     def source(self, name: str, *, schema: type[Schema]) -> None:
         self.sources[name] = SourceDeclaration(name, schema)
 
-    def view(self, name: str, sql: str, *, depends_on: list[str], materialize: bool = False) -> None:
-        self.views[name] = ViewDeclaration(name, sql, depends_on, materialize)
+    def view(self, name: str, sql: str, *, depends_on: list[str]) -> None:
+        self.views[name] = ViewDeclaration(name, sql, depends_on)
 
     def output(
         self,
