@@ -2,6 +2,8 @@ import asyncio
 import datetime as dt
 import typing
 
+import pyarrow as pa
+
 from quackflow.app import DataPacket, Node, OutputDeclaration, Quackflow, SourceDeclaration
 from quackflow.engine import Engine
 from quackflow.source import ReplayableSource, Source
@@ -39,8 +41,11 @@ class OutputStep:
 
     async def on_advance(self) -> None:
         """Called when the node's effective watermark advances."""
-        while self._should_fire():
-            await self._fire()
+        if self._should_fire():
+            target = None
+            if self._declaration.trigger_window is not None and self.effective_watermark is not None:
+                target = self._snap_to_window(self.effective_watermark)
+            await self._fire(target)
 
     def _should_fire(self) -> bool:
         if self._declaration.trigger_records is not None:
@@ -56,18 +61,45 @@ class OutputStep:
 
         return False
 
-    async def _fire(self) -> None:
+    async def _fire(self, fire_up_to: dt.datetime | None = None) -> None:
         self._records_at_last_fire = self._node.total_records
         if self._declaration.trigger_window is not None and self._last_fired_window is not None:
             batch_start = self._last_fired_window - self._max_window_size + self._declaration.trigger_window
-            window_seconds = int(self._declaration.trigger_window.total_seconds())
-            self._last_fired_window = self._last_fired_window + dt.timedelta(seconds=window_seconds)
+            batch_end = (
+                fire_up_to if fire_up_to is not None else self._last_fired_window + self._declaration.trigger_window
+            )
+            self._last_fired_window = batch_end
             self._engine.set_batch_start(batch_start)
-            self._engine.set_batch_end(self._last_fired_window)
+            self._engine.set_batch_end(batch_end)
             self._engine.set_window_hop(self._declaration.trigger_window)
         result = self._engine.query(self._declaration.sql)
-        await self._sink.write(result)
+        await self._emit_by_window(result)
         await self._propagate_expiration()
+
+    async def _emit_by_window(self, result: pa.RecordBatch) -> None:
+        """Emit results grouped by window_end in order."""
+        if "window_end" not in result.schema.names or result.num_rows == 0:
+            await self._sink.write(result)
+            return
+
+        table = pa.Table.from_batches([result])
+        table = table.sort_by("window_end")
+        window_ends = table.column("window_end")
+
+        current_end = None
+        start_idx = 0
+        for i, end in enumerate(window_ends):
+            if current_end is None:
+                current_end = end
+            elif end != current_end:
+                batch = table.slice(start_idx, i - start_idx).to_batches()[0]
+                await self._sink.write(batch)
+                current_end = end
+                start_idx = i
+
+        if start_idx < len(window_ends):
+            batch = table.slice(start_idx).to_batches()[0]
+            await self._sink.write(batch)
 
     async def _propagate_expiration(self) -> None:
         if self._last_fired_window is None:
@@ -178,4 +210,8 @@ class Runtime:
 
         for output_step in output_steps:
             if output_step._should_fire():
-                await output_step._fire()
+                target = None
+                decl = output_step._declaration
+                if decl.trigger_window is not None and output_step.effective_watermark is not None:
+                    target = output_step._snap_to_window(output_step.effective_watermark)
+                await output_step._fire(target)

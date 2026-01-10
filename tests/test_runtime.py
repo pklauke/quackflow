@@ -17,6 +17,11 @@ class EventSchema(Schema):
     event_time = Timestamp()
 
 
+class CountSchema(Schema):
+    cnt = Int()
+    window_end = Timestamp()
+
+
 def make_batch(ids: list[int], users: list[str], times: list[dt.datetime]) -> pa.RecordBatch:
     return pa.RecordBatch.from_pydict({"id": ids, "user_id": users, "event_time": times})
 
@@ -129,7 +134,12 @@ class TestRuntimeTriggers:
 
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(window=dt.timedelta(minutes=30))
+        # Use HOP to get window_end column for proper window-based batching
+        app.output(
+            "results",
+            "SELECT id, user_id, event_time, window_end FROM HOP('events', 'event_time', INTERVAL '30 minutes')",
+            schema=EventSchema,
+        ).trigger(window=dt.timedelta(minutes=30))
 
         runtime = Runtime(app, sources={"events": source}, sinks={"results": sink})
         await runtime.execute(
@@ -137,7 +147,82 @@ class TestRuntimeTriggers:
             end=dt.datetime(2024, 1, 1, 11, 0, tzinfo=dt.timezone.utc),
         )
 
+        # With unified processing, results are split by window_end
         assert len(sink.batches) == 2
+
+    @pytest.mark.asyncio
+    async def test_gradual_watermark_fires_windows_one_at_a_time(self):
+        """When watermark advances gradually, each window fires separately."""
+        time_notion = EventTimeNotion(column="event_time")
+        # Three separate batches, each advancing watermark by 10 minutes
+        # Last batch must reach end time (10:30) to terminate
+        batch1 = make_batch([1], ["alice"], [dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc)])
+        batch2 = make_batch([2], ["bob"], [dt.datetime(2024, 1, 1, 10, 15, tzinfo=dt.timezone.utc)])
+        batch3 = make_batch([3], ["charlie"], [dt.datetime(2024, 1, 1, 10, 25, tzinfo=dt.timezone.utc)])
+        # Final batch to push watermark past end time
+        batch4 = make_batch([4], ["david"], [dt.datetime(2024, 1, 1, 10, 35, tzinfo=dt.timezone.utc)])
+        source = FakeSource([batch1, batch2, batch3, batch4], time_notion)
+        sink = FakeSink()
+
+        app = Quackflow()
+        app.source("events", schema=EventSchema)
+        app.output(
+            "results",
+            "SELECT COUNT(*) as cnt, window_end FROM HOP('events', 'event_time', INTERVAL '10 minutes') GROUP BY window_end",
+            schema=CountSchema,
+        ).trigger(window=dt.timedelta(minutes=10))
+
+        runtime = Runtime(app, sources={"events": source}, sinks={"results": sink})
+        await runtime.execute(
+            start=dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+            end=dt.datetime(2024, 1, 1, 10, 30, tzinfo=dt.timezone.utc),
+        )
+
+        # batch1 (10:05) -> no fire (snap 10:00 == last_fired 10:00)
+        # batch2 (10:15) -> fires window 10:10 (snap 10:10 > 10:00)
+        # batch3 (10:25) -> fires window 10:20 (snap 10:20 > 10:10)
+        # batch4 (10:35) -> watermark >= end, stops. Final fire for window 10:30
+        assert len(sink.batches) == 3
+        counts = [b.to_pydict()["cnt"][0] for b in sink.batches]
+        assert counts == [1, 1, 1]  # One event per window
+
+    @pytest.mark.asyncio
+    async def test_watermark_jump_fires_multiple_windows_at_once(self):
+        """When watermark jumps, all intermediate windows fire in one query."""
+        time_notion = EventTimeNotion(column="event_time")
+        # Single batch with events spanning 30 minutes - watermark jumps past end
+        batch = make_batch(
+            [1, 2, 3, 4],
+            ["alice", "bob", "charlie", "david"],
+            [
+                dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 15, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 25, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 35, tzinfo=dt.timezone.utc),  # Past end time
+            ],
+        )
+        source = FakeSource([batch], time_notion)
+        sink = FakeSink()
+
+        app = Quackflow()
+        app.source("events", schema=EventSchema)
+        app.output(
+            "results",
+            "SELECT COUNT(*) as cnt, window_end FROM HOP('events', 'event_time', INTERVAL '10 minutes') GROUP BY window_end",
+            schema=CountSchema,
+        ).trigger(window=dt.timedelta(minutes=10))
+
+        runtime = Runtime(app, sources={"events": source}, sinks={"results": sink})
+        await runtime.execute(
+            start=dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+            end=dt.datetime(2024, 1, 1, 10, 30, tzinfo=dt.timezone.utc),
+        )
+
+        # Watermark jumps to 10:35, triggering windows 10:10, 10:20, 10:30 in one query
+        # Results are still split by window_end for ordered emission
+        assert len(sink.batches) == 3
+        window_ends = [b.to_pydict()["window_end"][0] for b in sink.batches]
+        assert window_ends[0] < window_ends[1] < window_ends[2]  # Ordered by window_end
 
 
 class TestRuntimeMultipleOutputs:
