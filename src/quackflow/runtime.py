@@ -11,11 +11,12 @@ if typing.TYPE_CHECKING:
 
 
 class OutputStep:
-    def __init__(self, node: Node, engine: Engine, sink: "Sink"):
+    def __init__(self, node: Node, engine: Engine, sink: "Sink", max_window_size: dt.timedelta):
         self._node = node
         self._declaration: OutputDeclaration = node.declaration  # type: ignore[assignment]
         self._engine = engine
         self._sink = sink
+        self._max_window_size = max_window_size
         self._records_at_last_fire = 0
         self._last_fired_window: dt.datetime | None = None
 
@@ -58,9 +59,11 @@ class OutputStep:
     async def _fire(self) -> None:
         self._records_at_last_fire = self._node.total_records
         if self._declaration.trigger_window is not None and self._last_fired_window is not None:
+            batch_start = self._last_fired_window - self._max_window_size + self._declaration.trigger_window
             window_seconds = int(self._declaration.trigger_window.total_seconds())
             self._last_fired_window = self._last_fired_window + dt.timedelta(seconds=window_seconds)
-            self._engine.set_window_end(self._last_fired_window)
+            self._engine.set_batch_start(batch_start)
+            self._engine.set_batch_end(self._last_fired_window)
             self._engine.set_window_hop(self._declaration.trigger_window)
         result = self._engine.query(self._declaration.sql)
         await self._sink.write(result)
@@ -146,10 +149,19 @@ class Runtime:
             if node.node_type == "view":
                 self._engine.create_view(node.name, node.declaration.sql)  # type: ignore[union-attr]
 
+        all_window_sizes: list[dt.timedelta] = []
+        for view in self._app.views.values():
+            all_window_sizes.extend(view.window_sizes)
+        for output in self._app.outputs.values():
+            all_window_sizes.extend(output.window_sizes)
+        max_window_size = max(all_window_sizes, default=dt.timedelta(0))
+
         output_steps: list[OutputStep] = []
         for node in dag.output_nodes():
             sink = self._sinks[node.name]
-            step = OutputStep(node, self._engine, sink)
+            decl: OutputDeclaration = node.declaration  # type: ignore[assignment]
+            effective_max = max(max_window_size, decl.trigger_window or dt.timedelta(0))
+            step = OutputStep(node, self._engine, sink, effective_max)
             step.initialize(start)
             node.set_on_advance_callback(step.on_advance)
             output_steps.append(step)

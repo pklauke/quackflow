@@ -3,12 +3,13 @@ import datetime as dt
 import duckdb
 import pytest
 
-from quackflow.window import register_window_functions_batch, register_window_functions_streaming
+from quackflow.window import register_window_functions
 
 
 @pytest.fixture
 def conn():
     conn = duckdb.connect(":memory:")
+    register_window_functions(conn)
 
     conn.execute("""
         CREATE TABLE events (
@@ -30,8 +31,9 @@ def conn():
 
 class TestWindowStreaming:
     def test_filters_to_current_window(self, conn):
-        register_window_functions_streaming(conn)
-        conn.execute("SET VARIABLE __window_end = TIMESTAMP '2024-01-01 10:10:00'")
+        conn.execute("SET VARIABLE __batch_start = TIMESTAMP '2024-01-01 10:00:00'")
+        conn.execute("SET VARIABLE __batch_end = TIMESTAMP '2024-01-01 10:10:00'")
+        conn.execute("SET VARIABLE __window_hop = INTERVAL '10 minutes'")
 
         result = conn.execute("""
             SELECT id, window_start, window_end
@@ -46,14 +48,16 @@ class TestWindowStreaming:
         assert result[0][2] == dt.datetime(2024, 1, 1, 10, 10)
 
     def test_different_window_sizes_same_end(self, conn):
-        register_window_functions_streaming(conn)
-        conn.execute("SET VARIABLE __window_end = TIMESTAMP '2024-01-01 10:20:00'")
+        conn.execute("SET VARIABLE __batch_start = TIMESTAMP '2024-01-01 10:10:00'")
+        conn.execute("SET VARIABLE __batch_end = TIMESTAMP '2024-01-01 10:20:00'")
+        conn.execute("SET VARIABLE __window_hop = INTERVAL '10 minutes'")
 
         result_10min = conn.execute("""
             SELECT id FROM HOP('events', 'event_time', INTERVAL '10 minutes')
             ORDER BY id
         """).fetchall()
 
+        conn.execute("SET VARIABLE __batch_start = TIMESTAMP '2024-01-01 10:15:00'")
         result_5min = conn.execute("""
             SELECT id FROM HOP('events', 'event_time', INTERVAL '5 minutes')
             ORDER BY id
@@ -63,9 +67,10 @@ class TestWindowStreaming:
         assert [r[0] for r in result_5min] == [4]
 
     def test_window_end_is_exclusive(self, conn):
-        register_window_functions_streaming(conn)
         conn.execute("INSERT INTO events VALUES (99, 'test', TIMESTAMP '2024-01-01 10:10:00')")
-        conn.execute("SET VARIABLE __window_end = TIMESTAMP '2024-01-01 10:10:00'")
+        conn.execute("SET VARIABLE __batch_start = TIMESTAMP '2024-01-01 10:00:00'")
+        conn.execute("SET VARIABLE __batch_end = TIMESTAMP '2024-01-01 10:10:00'")
+        conn.execute("SET VARIABLE __window_hop = INTERVAL '10 minutes'")
 
         result = conn.execute("""
             SELECT id FROM HOP('events', 'event_time', INTERVAL '10 minutes')
@@ -75,8 +80,9 @@ class TestWindowStreaming:
         assert len(result) == 0
 
     def test_works_with_aggregation(self, conn):
-        register_window_functions_streaming(conn)
-        conn.execute("SET VARIABLE __window_end = TIMESTAMP '2024-01-01 10:10:00'")
+        conn.execute("SET VARIABLE __batch_start = TIMESTAMP '2024-01-01 10:00:00'")
+        conn.execute("SET VARIABLE __batch_end = TIMESTAMP '2024-01-01 10:10:00'")
+        conn.execute("SET VARIABLE __window_hop = INTERVAL '10 minutes'")
 
         result = conn.execute("""
             SELECT window_start, window_end, user_id, COUNT(*) as cnt
@@ -92,7 +98,6 @@ class TestWindowStreaming:
 
 class TestWindowBatch:
     def test_tumbling_one_window_per_record(self, conn):
-        register_window_functions_batch(conn)
         conn.execute("SET VARIABLE __batch_start = TIMESTAMP '2024-01-01 10:00:00'")
         conn.execute("SET VARIABLE __batch_end = TIMESTAMP '2024-01-01 10:30:00'")
         conn.execute("SET VARIABLE __window_hop = INTERVAL '10 minutes'")
@@ -107,7 +112,6 @@ class TestWindowBatch:
             assert row[1] == 1
 
     def test_tumbling_aggregation_per_window(self, conn):
-        register_window_functions_batch(conn)
         conn.execute("SET VARIABLE __batch_start = TIMESTAMP '2024-01-01 10:00:00'")
         conn.execute("SET VARIABLE __batch_end = TIMESTAMP '2024-01-01 10:30:00'")
         conn.execute("SET VARIABLE __window_hop = INTERVAL '10 minutes'")
@@ -125,7 +129,6 @@ class TestWindowBatch:
         assert result[2][2] == 1
 
     def test_hopping_expands_records_into_windows(self, conn):
-        register_window_functions_batch(conn)
         conn.execute("SET VARIABLE __batch_start = TIMESTAMP '2024-01-01 10:00:00'")
         conn.execute("SET VARIABLE __batch_end = TIMESTAMP '2024-01-01 10:30:00'")
         conn.execute("SET VARIABLE __window_hop = INTERVAL '5 minutes'")
@@ -151,7 +154,6 @@ class TestBatchStreamingEquivalence:
         batch_start = dt.datetime(2024, 1, 1, 10, 0)
         batch_end = dt.datetime(2024, 1, 1, 10, 30)
 
-        register_window_functions_batch(conn)
         conn.execute(f"SET VARIABLE __batch_start = TIMESTAMP '{batch_start}'")
         conn.execute(f"SET VARIABLE __batch_end = TIMESTAMP '{batch_end}'")
         conn.execute("SET VARIABLE __window_hop = INTERVAL '10 minutes'")
@@ -163,13 +165,12 @@ class TestBatchStreamingEquivalence:
             ORDER BY window_start, user_id
         """).fetchall()
 
-        conn.execute("DROP FUNCTION HOP")
-        register_window_functions_streaming(conn)
-
         streaming_results = []
+        window_start = batch_start
         window_end = batch_start + size
         while window_end <= batch_end:
-            conn.execute(f"SET VARIABLE __window_end = TIMESTAMP '{window_end}'")
+            conn.execute(f"SET VARIABLE __batch_start = TIMESTAMP '{window_start}'")
+            conn.execute(f"SET VARIABLE __batch_end = TIMESTAMP '{window_end}'")
 
             window_result = conn.execute("""
                 SELECT window_start, window_end, user_id, COUNT(*) as cnt
@@ -178,6 +179,7 @@ class TestBatchStreamingEquivalence:
                 ORDER BY user_id
             """).fetchall()
             streaming_results.extend(window_result)
+            window_start = window_start + hop
             window_end = window_end + hop
 
         streaming_results.sort(key=lambda x: (x[0], x[2]))
@@ -190,7 +192,6 @@ class TestBatchStreamingEquivalence:
         batch_start = dt.datetime(2024, 1, 1, 10, 0)
         batch_end = dt.datetime(2024, 1, 1, 10, 30)
 
-        register_window_functions_batch(conn)
         conn.execute(f"SET VARIABLE __batch_start = TIMESTAMP '{batch_start}'")
         conn.execute(f"SET VARIABLE __batch_end = TIMESTAMP '{batch_end}'")
         conn.execute("SET VARIABLE __window_hop = INTERVAL '5 minutes'")
@@ -202,13 +203,12 @@ class TestBatchStreamingEquivalence:
             ORDER BY window_start
         """).fetchall()
 
-        conn.execute("DROP FUNCTION HOP")
-        register_window_functions_streaming(conn)
-
         streaming_results = []
+        window_start = batch_start
         window_end = batch_start + size
         while window_end <= batch_end:
-            conn.execute(f"SET VARIABLE __window_end = TIMESTAMP '{window_end}'")
+            conn.execute(f"SET VARIABLE __batch_start = TIMESTAMP '{window_start}'")
+            conn.execute(f"SET VARIABLE __batch_end = TIMESTAMP '{window_end}'")
 
             window_result = conn.execute("""
                 SELECT window_start, window_end, COUNT(*) as cnt
@@ -216,6 +216,7 @@ class TestBatchStreamingEquivalence:
                 GROUP BY window_start, window_end
             """).fetchall()
             streaming_results.extend(window_result)
+            window_start = window_start + hop
             window_end = window_end + hop
 
         streaming_results.sort(key=lambda x: x[0])

@@ -4,7 +4,6 @@ import typing
 from quackflow.app import OutputDeclaration, Quackflow, SourceDeclaration
 from quackflow.engine import Engine
 from quackflow.source import Source
-from quackflow.window import register_window_functions_batch
 
 if typing.TYPE_CHECKING:
     from quackflow.sink import Sink
@@ -21,13 +20,12 @@ class BatchRuntime:
         self._sources = sources
         self._sinks = sinks
         self._engine = Engine()
-        register_window_functions_batch(self._engine._conn)
 
     async def execute(self, start: dt.datetime, end: dt.datetime) -> None:
         dag = self._app.compile()
 
-        self._engine._conn.execute("SET VARIABLE __batch_start = $1::TIMESTAMP", [start])
-        self._engine._conn.execute("SET VARIABLE __batch_end = $1::TIMESTAMP", [end])
+        self._engine.set_batch_start(start)
+        self._engine.set_batch_end(end)
 
         for node in dag.source_nodes():
             declaration: SourceDeclaration = node.declaration  # type: ignore[assignment]

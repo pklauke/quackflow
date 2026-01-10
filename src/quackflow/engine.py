@@ -4,13 +4,16 @@ import duckdb
 import pyarrow as pa
 
 from quackflow.schema import Schema
-from quackflow.window import register_window_functions_streaming
+from quackflow.window import register_window_functions
 
 
 class Engine:
     def __init__(self, database: str = ":memory:"):
         self._conn = duckdb.connect(database)
-        register_window_functions_streaming(self._conn)
+        self._conn.execute("SET VARIABLE __batch_start = TIMESTAMP '1970-01-01 00:00:00'")
+        self._conn.execute("SET VARIABLE __batch_end = TIMESTAMP '1970-01-01 00:00:00'")
+        self._conn.execute("SET VARIABLE __window_hop = INTERVAL '1 minute'")
+        register_window_functions(self._conn)
 
     def create_table(self, name: str, schema: type[Schema]) -> None:
         ddl = schema.create_table_ddl(name)
@@ -22,8 +25,11 @@ class Engine:
     def insert(self, table_name: str, batch: pa.RecordBatch) -> None:
         self._conn.execute(f"INSERT INTO {table_name} SELECT * FROM batch")
 
-    def set_window_end(self, window_end: dt.datetime) -> None:
-        self._conn.execute("SET VARIABLE __window_end = $1::TIMESTAMP", [window_end])
+    def set_batch_start(self, batch_start: dt.datetime) -> None:
+        self._conn.execute("SET VARIABLE __batch_start = $1::TIMESTAMP", [batch_start])
+
+    def set_batch_end(self, batch_end: dt.datetime) -> None:
+        self._conn.execute("SET VARIABLE __batch_end = $1::TIMESTAMP", [batch_end])
 
     def set_window_hop(self, hop: dt.timedelta) -> None:
         self._conn.execute("SET VARIABLE __window_hop = $1::INTERVAL", [hop])

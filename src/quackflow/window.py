@@ -1,20 +1,7 @@
 import duckdb
 
 
-def register_window_functions_streaming(conn: duckdb.DuckDBPyConnection) -> None:
-    conn.execute("""
-        CREATE OR REPLACE FUNCTION HOP(tbl, ts_col, size) AS TABLE
-        SELECT
-            t.*,
-            getvariable('__window_end')::TIMESTAMP - size AS window_start,
-            getvariable('__window_end')::TIMESTAMP AS window_end
-        FROM query_table(tbl) t
-        WHERE t[ts_col] >= getvariable('__window_end')::TIMESTAMP - size
-          AND t[ts_col] < getvariable('__window_end')::TIMESTAMP
-    """)
-
-
-def register_window_functions_batch(conn: duckdb.DuckDBPyConnection) -> None:
+def register_window_functions(conn: duckdb.DuckDBPyConnection) -> None:
     conn.execute("""
         CREATE OR REPLACE FUNCTION HOP(tbl, ts_col, size) AS TABLE
         WITH __windows AS (
