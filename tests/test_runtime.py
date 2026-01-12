@@ -271,7 +271,7 @@ class TestDataExpiration:
         sink = FakeSink()
 
         app = Quackflow()
-        app.source("events", schema=EventSchema)
+        app.source("events", schema=EventSchema, ts_col="event_time")
         app.output(
             "results",
             "SELECT * FROM HOP('events', 'event_time', INTERVAL '5 minutes')",
@@ -304,7 +304,7 @@ class TestDataExpiration:
         sink2 = FakeSink()
 
         app = Quackflow()
-        app.source("events", schema=EventSchema)
+        app.source("events", schema=EventSchema, ts_col="event_time")
         app.output(
             "output_5min",
             "SELECT * FROM HOP('events', 'event_time', INTERVAL '5 minutes')",
@@ -345,7 +345,7 @@ class TestDataExpiration:
         sink = FakeSink()
 
         app = Quackflow()
-        app.source("events", schema=EventSchema)
+        app.source("events", schema=EventSchema, ts_col="event_time")
         app.view(
             "windowed_events",
             "SELECT * FROM HOP('events', 'event_time', INTERVAL '10 minutes')",

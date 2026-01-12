@@ -5,7 +5,7 @@ from dataclasses import dataclass
 import pyarrow as pa
 
 from quackflow.schema import Schema
-from quackflow.sql import extract_hop_sources, extract_hop_window_sizes, extract_tables
+from quackflow.sql import extract_hop_sources, extract_hop_window_sizes, extract_tables, has_group_by
 
 
 @dataclass
@@ -15,18 +15,33 @@ class DataPacket:
 
 
 class SourceDeclaration:
-    def __init__(self, name: str, schema: type[Schema]):
+    def __init__(
+        self,
+        name: str,
+        schema: type[Schema],
+        partition_by: list[str] | None = None,
+        ts_col: str | None = None,
+    ):
         self.name = name
         self.schema = schema
-        self.ts_col: str | None = None  # Set during compile from HOP calls
+        self.partition_by = partition_by
+        self.ts_col = ts_col
 
 
 class ViewDeclaration:
-    def __init__(self, name: str, sql: str, depends_on: list[str], window_sizes: list[dt.timedelta]):
+    def __init__(
+        self,
+        name: str,
+        sql: str,
+        depends_on: list[str],
+        window_sizes: list[dt.timedelta],
+        partition_by: list[str] | None = None,
+    ):
         self.name = name
         self.sql = sql
         self.depends_on = depends_on
         self.window_sizes = window_sizes
+        self.partition_by = partition_by
 
 
 SECONDS_PER_DAY = 86400
@@ -34,13 +49,20 @@ SECONDS_PER_DAY = 86400
 
 class OutputDeclaration:
     def __init__(
-        self, name: str, sql: str, schema: type[Schema], depends_on: list[str], window_sizes: list[dt.timedelta]
+        self,
+        name: str,
+        sql: str,
+        schema: type[Schema],
+        depends_on: list[str],
+        window_sizes: list[dt.timedelta],
+        partition_by: list[str] | None = None,
     ):
         self.name = name
         self.sql = sql
         self.schema = schema
         self.depends_on = depends_on
         self.window_sizes = window_sizes
+        self.partition_by = partition_by
         self.trigger_window: dt.timedelta | None = None
         self.trigger_records: int | None = None
 
@@ -182,13 +204,20 @@ class Quackflow:
         self.views: dict[str, ViewDeclaration] = {}
         self.outputs: dict[str, OutputDeclaration] = {}
 
-    def source(self, name: str, *, schema: type[Schema]) -> None:
-        self.sources[name] = SourceDeclaration(name, schema)
+    def source(
+        self,
+        name: str,
+        *,
+        schema: type[Schema],
+        partition_by: list[str] | None = None,
+        ts_col: str | None = None,
+    ) -> None:
+        self.sources[name] = SourceDeclaration(name, schema, partition_by, ts_col)
 
-    def view(self, name: str, sql: str) -> None:
+    def view(self, name: str, sql: str, *, partition_by: list[str] | None = None) -> None:
         depends_on = self._resolve_dependencies(sql)
         window_sizes = extract_hop_window_sizes(sql)
-        self.views[name] = ViewDeclaration(name, sql, depends_on, window_sizes)
+        self.views[name] = ViewDeclaration(name, sql, depends_on, window_sizes, partition_by)
 
     def output(
         self,
@@ -196,10 +225,11 @@ class Quackflow:
         sql: str,
         *,
         schema: type[Schema],
+        partition_by: list[str] | None = None,
     ) -> OutputDeclaration:
         depends_on = self._resolve_dependencies(sql)
         window_sizes = extract_hop_window_sizes(sql)
-        declaration = OutputDeclaration(name, sql, schema, depends_on, window_sizes)
+        declaration = OutputDeclaration(name, sql, schema, depends_on, window_sizes, partition_by)
         self.outputs[name] = declaration
         return declaration
 
@@ -207,20 +237,6 @@ class Quackflow:
         referenced = extract_tables(sql)
         known = set(self.sources.keys()) | set(self.views.keys())
         return list(referenced & known)
-
-    def _set_source_ts_cols(self) -> None:
-        """Extract ts_col from HOP calls and set on source declarations."""
-        for output in self.outputs.values():
-            hop_sources = extract_hop_sources(output.sql)
-            for source_name, (ts_col, _) in hop_sources.items():
-                if source_name in self.sources:
-                    self.sources[source_name].ts_col = ts_col
-
-        for view in self.views.values():
-            hop_sources = extract_hop_sources(view.sql)
-            for source_name, (ts_col, _) in hop_sources.items():
-                if source_name in self.sources:
-                    self.sources[source_name].ts_col = ts_col
 
     def _check_stacked_aggregations(self) -> None:
         for view in self.views.values():
@@ -259,7 +275,13 @@ class Quackflow:
                             f"Window size ({size_seconds}s) must be a multiple of trigger window ({hop_seconds}s)"
                         )
 
-        self._set_source_ts_cols()
+        # Validate: views cannot have GROUP BY (aggregation only in output)
+        for view in self.views.values():
+            if has_group_by(view.sql):
+                raise ValueError(
+                    f"View '{view.name}' contains GROUP BY. Aggregations are only allowed in output nodes."
+                )
+
         self._check_stacked_aggregations()
 
         dag = DAG()

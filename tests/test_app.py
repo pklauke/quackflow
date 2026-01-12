@@ -102,20 +102,16 @@ class TestQuackflowTrigger:
         dag = app.compile()
         assert dag is not None
 
-    def test_stacked_aggregations_not_supported(self):
+    def test_view_with_group_by_not_allowed(self):
         app = Quackflow()
         app.source("events", schema=EventSchema)
         app.view(
-            "minute_agg",
-            "SELECT user_id, COUNT(*) as cnt, window_end FROM HOP('events', 'event_time', INTERVAL '1 minute') GROUP BY user_id, window_end",
+            "user_counts",
+            "SELECT user_id, COUNT(*) as cnt FROM events GROUP BY user_id",
         )
-        app.view(
-            "stacked",
-            "SELECT user_id, SUM(cnt), window_end FROM HOP('minute_agg', 'window_end', INTERVAL '5 minutes') GROUP BY user_id, window_end",
-        )
-        app.output("results", "SELECT * FROM stacked", schema=EventSchema).trigger(records=1)
+        app.output("results", "SELECT * FROM user_counts", schema=EventSchema).trigger(records=1)
 
-        with pytest.raises(ValueError, match="Stacked aggregations not supported"):
+        with pytest.raises(ValueError, match="GROUP BY"):
             app.compile()
 
 
@@ -123,8 +119,10 @@ class TestQuackflowDAG:
     def test_compile_creates_dag(self):
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id")
-        app.output("results", "SELECT * FROM user_counts", schema=OutputSchema).trigger(records=1)
+        app.view("filtered_events", "SELECT * FROM events WHERE user_id = 'alice'")
+        app.output(
+            "results", "SELECT user_id, COUNT(*) as count FROM filtered_events GROUP BY user_id", schema=OutputSchema
+        ).trigger(records=1)
 
         dag = app.compile()
 
@@ -134,13 +132,15 @@ class TestQuackflowDAG:
     def test_dag_has_correct_dependencies(self):
         app = Quackflow()
         app.source("events", schema=EventSchema)
-        app.view("user_counts", "SELECT user_id, COUNT(*) as count FROM events GROUP BY user_id")
-        app.output("results", "SELECT * FROM user_counts", schema=OutputSchema).trigger(records=1)
+        app.view("filtered_events", "SELECT * FROM events WHERE user_id = 'alice'")
+        app.output(
+            "results", "SELECT user_id, COUNT(*) as count FROM filtered_events GROUP BY user_id", schema=OutputSchema
+        ).trigger(records=1)
 
         dag = app.compile()
 
         output_node = dag.get_node("results")
-        view_node = dag.get_node("user_counts")
+        view_node = dag.get_node("filtered_events")
         source_node = dag.get_node("events")
 
         assert view_node in output_node.upstream

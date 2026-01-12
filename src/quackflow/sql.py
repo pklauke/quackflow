@@ -81,3 +81,9 @@ def extract_tables(sql: str) -> set[str]:
                 tables.add(first_arg.this)
 
     return tables
+
+
+def has_group_by(sql: str) -> bool:
+    """Check if SQL statement contains a GROUP BY clause."""
+    parsed = sqlglot.parse_one(sql, dialect="duckdb")
+    return parsed.find(exp.Group) is not None
