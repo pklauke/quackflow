@@ -6,6 +6,7 @@ from typing import TYPE_CHECKING
 from quackflow.app import DAG, OutputDeclaration, SourceDeclaration, ViewDeclaration
 from quackflow.execution import ExecutionDAG
 from quackflow.task import Task
+from quackflow.transport import LocalDownstreamHandle, LocalUpstreamHandle
 
 if TYPE_CHECKING:
     from quackflow.engine import Engine
@@ -58,9 +59,11 @@ class SingleWorkerOrchestrator:
         for task_config in self.exec_dag.tasks.values():
             task = self.tasks[task_config.task_id]
             for downstream_id in task_config.downstream_tasks:
-                task.downstream_tasks.append(self.tasks[downstream_id])
+                downstream_task = self.tasks[downstream_id]
+                task.downstream_handles.append(LocalDownstreamHandle(task.config.task_id, downstream_task))
             for upstream_id in task_config.upstream_tasks:
-                task.upstream_tasks.append(self.tasks[upstream_id])
+                upstream_task = self.tasks[upstream_id]
+                task.upstream_handles.append(LocalUpstreamHandle(task.config.task_id, upstream_task))
 
     def _compute_max_window_size(self) -> dt.timedelta:
         all_window_sizes: list[dt.timedelta] = []

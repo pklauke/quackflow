@@ -10,6 +10,12 @@ import pyarrow as pa
 
 from quackflow.app import OutputDeclaration, SourceDeclaration, ViewDeclaration
 from quackflow.execution import TaskConfig
+from quackflow.transport import (
+    DownstreamHandle,
+    ExpirationMessage,
+    UpstreamHandle,
+    WatermarkMessage,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +50,8 @@ class Task:
         self.engine = engine
         self._state = TaskState()
 
-        self.downstream_tasks: list["Task"] = []
-        self.upstream_tasks: list["Task"] = []
+        self.downstream_handles: list[DownstreamHandle] = []
+        self.upstream_handles: list[UpstreamHandle] = []
 
         self._source: "Source | None" = None
         self._sink: "Sink | None" = None
@@ -65,7 +71,7 @@ class Task:
     def effective_watermark(self) -> dt.datetime | None:
         if not self._state.upstream_watermarks:
             return None
-        if len(self._state.upstream_watermarks) < len(self.upstream_tasks):
+        if len(self._state.upstream_watermarks) < len(self.upstream_handles):
             return None
         return min(self._state.upstream_watermarks.values())
 
@@ -77,7 +83,7 @@ class Task:
     def expiration_threshold(self) -> dt.datetime | None:
         if not self._downstream_thresholds:
             return None
-        if len(self._downstream_thresholds) < len(self.downstream_tasks):
+        if len(self._downstream_thresholds) < len(self.downstream_handles):
             return None
         return min(self._downstream_thresholds.values())
 
@@ -108,8 +114,9 @@ class Task:
                     self.engine.insert(self.config.node_name, batch)
                     watermark = source.watermark
                     if watermark is not None:
-                        for downstream in self.downstream_tasks:
-                            await downstream.receive_watermark(self.config.task_id, watermark, batch.num_rows)
+                        message = WatermarkMessage(watermark=watermark, num_rows=batch.num_rows)
+                        for handle in self.downstream_handles:
+                            await handle.send(message)
 
                 if batch.num_rows == 0:
                     await asyncio.sleep(0.01)
@@ -119,17 +126,17 @@ class Task:
         finally:
             await source.stop()
 
-    async def receive_watermark(self, upstream_id: str, watermark: dt.datetime, num_rows: int) -> None:
+    async def receive_watermark(self, upstream_id: str, message: WatermarkMessage) -> None:
         logger.debug(
             "%s <- %s: WATERMARK %s (%d rows)",
             self.config.task_id,
             upstream_id,
-            _fmt_wm(watermark),
-            num_rows,
+            _fmt_wm(message.watermark),
+            message.num_rows,
         )
         old_effective = self.effective_watermark
-        self._state.upstream_watermarks[upstream_id] = watermark
-        self._state.upstream_records[upstream_id] = self._state.upstream_records.get(upstream_id, 0) + num_rows
+        self._state.upstream_watermarks[upstream_id] = message.watermark
+        self._state.upstream_records[upstream_id] = self._state.upstream_records.get(upstream_id, 0) + message.num_rows
         new_effective = self.effective_watermark
 
         if new_effective is not None and (old_effective is None or new_effective > old_effective):
@@ -137,13 +144,18 @@ class Task:
                 if self._should_fire():
                     await self._fire()
             else:
-                for downstream in self.downstream_tasks:
-                    await downstream.receive_watermark(self.config.task_id, new_effective, num_rows)
+                forward_message = WatermarkMessage(
+                    watermark=new_effective,
+                    num_rows=message.num_rows,
+                    batch=message.batch,
+                )
+                for handle in self.downstream_handles:
+                    await handle.send(forward_message)
 
-    async def receive_expiration(self, downstream_id: str, threshold: dt.datetime) -> None:
-        logger.debug("%s <- %s: EXPIRATION %s", self.config.task_id, downstream_id, _fmt_wm(threshold))
+    async def receive_expiration(self, downstream_id: str, message: ExpirationMessage) -> None:
+        logger.debug("%s <- %s: EXPIRATION %s", self.config.task_id, downstream_id, _fmt_wm(message.threshold))
         old_threshold = self.expiration_threshold
-        self._downstream_thresholds[downstream_id] = threshold
+        self._downstream_thresholds[downstream_id] = message.threshold
         new_threshold = self.expiration_threshold
 
         if new_threshold is not None and (old_threshold is None or new_threshold > old_threshold):
@@ -202,9 +214,10 @@ class Task:
 
         max_window = max(self.declaration.window_sizes, default=dt.timedelta(0))
         threshold = self._state.last_fired_window - max_window
+        message = ExpirationMessage(threshold=threshold)
 
-        for upstream in self.upstream_tasks:
-            await upstream.receive_expiration(self.config.task_id, threshold)
+        for handle in self.upstream_handles:
+            await handle.send(message)
 
     async def _emit_by_window(self, result: pa.RecordBatch) -> None:
         if self._sink is None:
@@ -270,8 +283,9 @@ class Task:
                     own_threshold = self.effective_watermark - max_window
                     final_threshold = min(threshold, own_threshold)
 
-            for upstream in self.upstream_tasks:
-                await upstream.receive_expiration(self.config.task_id, final_threshold)
+            message = ExpirationMessage(threshold=final_threshold)
+            for handle in self.upstream_handles:
+                await handle.send(message)
 
     def checkpoint(self) -> TaskState:
         return self._state
