@@ -41,6 +41,8 @@ class FakeSource:
 
     async def read(self) -> pa.RecordBatch:
         if self._index >= len(self._batches):
+            # Signal exhaustion by advancing watermark to max
+            self._watermark = dt.datetime.max.replace(tzinfo=dt.timezone.utc)
             schema = self._batches[0].schema if self._batches else None
             return pa.RecordBatch.from_pydict({col: [] for col in schema.names}, schema=schema)
         if self._delay > 0 and self._index > 0:

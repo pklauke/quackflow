@@ -262,10 +262,10 @@ async def main():
     for i, batch_rows in enumerate(sink.to_dicts()):
         for row in batch_rows:
             print(
-                f"  {row['category']:12} | "
+                f" {row['window_start'].strftime('%H:%M:%S')} - {row['window_end'].strftime('%H:%M:%S')} | "
+                f"{row['category']:12} | "
                 f"${row['total_amount']:,.2f} | "
-                f"{row['order_count']} orders | "
-                f"{row['window_start'].strftime('%H:%M')}-{row['window_end'].strftime('%H:%M')}"
+                f"{row['order_count']} orders"
             )
 
 

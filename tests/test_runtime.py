@@ -252,6 +252,139 @@ class TestRuntimeMultipleOutputs:
 
 class TestDataExpiration:
     @pytest.mark.asyncio
+    async def test_view_joining_source_and_view(self):
+        """View depending on both a source and another view must receive watermarks from both."""
+        time_notion = EventTimeNotion(column="event_time")
+
+        # Source A: goes through a view first
+        a_batch = make_batch(
+            [1, 2],
+            ["alice", "bob"],
+            [
+                dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc),
+            ],
+        )
+        source_a = FakeSource([a_batch], time_notion)
+
+        # Source B: direct to join
+        b_batch = pa.RecordBatch.from_pydict(
+            {
+                "id": [1, 2],
+                "user_id": ["alice", "bob"],
+                "event_time": [
+                    dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+                    dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc),
+                ],
+            }
+        )
+        source_b = FakeSource([b_batch], time_notion)
+
+        sink = FakeSink()
+
+        app = Quackflow()
+        app.source("source_a", schema=EventSchema, ts_col="event_time")
+        app.source("source_b", schema=EventSchema, ts_col="event_time")
+        app.view("filtered_a", "SELECT * FROM source_a WHERE user_id != 'nobody'")
+        app.view(
+            "joined",
+            """SELECT a.id, a.user_id, a.event_time
+               FROM HOP('filtered_a', 'event_time', INTERVAL '5 minutes') a
+               JOIN HOP('source_b', 'event_time', INTERVAL '5 minutes') b
+               ON a.id = b.id AND a.window_end = b.window_end""",
+        )
+        app.output(
+            "results",
+            "SELECT * FROM HOP('joined', 'event_time', INTERVAL '5 minutes')",
+            schema=EventSchema,
+        ).trigger(window=dt.timedelta(minutes=5))
+
+        runtime = Runtime(
+            app,
+            sources={"source_a": source_a, "source_b": source_b},
+            sinks={"results": sink},
+        )
+        await runtime.execute(
+            start=dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+            end=dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc),
+        )
+
+        total_rows = sum(b.num_rows for b in sink.batches)
+        assert total_rows > 0, "Output should have received data from join"
+
+    @pytest.mark.asyncio
+    async def test_expiration_flows_through_join_to_both_sources(self):
+        """Expiration must reach both sources through a view with multiple upstreams."""
+        time_notion = EventTimeNotion(column="event_time")
+
+        events_batch1 = make_batch(
+            [1, 2],
+            ["alice", "bob"],
+            [
+                dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 1, tzinfo=dt.timezone.utc),
+            ],
+        )
+        events_batch2 = make_batch(
+            [3],
+            ["charlie"],
+            [dt.datetime(2024, 1, 1, 10, 10, tzinfo=dt.timezone.utc)],
+        )
+        events_source = FakeSource([events_batch1, events_batch2], time_notion)
+
+        meta_batch1 = pa.RecordBatch.from_pydict(
+            {
+                "id": [1, 2],
+                "user_id": ["alice", "bob"],
+                "event_time": [
+                    dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+                    dt.datetime(2024, 1, 1, 10, 1, tzinfo=dt.timezone.utc),
+                ],
+            }
+        )
+        meta_batch2 = pa.RecordBatch.from_pydict(
+            {
+                "id": [3],
+                "user_id": ["charlie"],
+                "event_time": [dt.datetime(2024, 1, 1, 10, 10, tzinfo=dt.timezone.utc)],
+            }
+        )
+        meta_source = FakeSource([meta_batch1, meta_batch2], time_notion)
+
+        sink = FakeSink()
+
+        app = Quackflow()
+        app.source("events", schema=EventSchema, ts_col="event_time")
+        app.source("metadata", schema=EventSchema, ts_col="event_time")
+        app.view(
+            "joined",
+            """SELECT e.id, e.user_id, e.event_time
+               FROM HOP('events', 'event_time', INTERVAL '5 minutes') e
+               JOIN HOP('metadata', 'event_time', INTERVAL '5 minutes') m
+               ON e.id = m.id AND e.window_end = m.window_end""",
+        )
+        app.output(
+            "results",
+            "SELECT * FROM HOP('joined', 'event_time', INTERVAL '5 minutes')",
+            schema=EventSchema,
+        ).trigger(window=dt.timedelta(minutes=5))
+
+        runtime = Runtime(
+            app,
+            sources={"events": events_source, "metadata": meta_source},
+            sinks={"results": sink},
+        )
+        await runtime.execute(
+            start=dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+            end=dt.datetime(2024, 1, 1, 10, 10, tzinfo=dt.timezone.utc),
+        )
+
+        events_count = runtime._engine.query("SELECT COUNT(*) as cnt FROM events").to_pydict()["cnt"][0]
+        meta_count = runtime._engine.query("SELECT COUNT(*) as cnt FROM metadata").to_pydict()["cnt"][0]
+        assert events_count == 1, f"events should have 1 row, got {events_count}"
+        assert meta_count == 1, f"metadata should have 1 row, got {meta_count}"
+
+    @pytest.mark.asyncio
     async def test_data_expires_after_window_fires(self):
         time_notion = EventTimeNotion(column="event_time")
         batch1 = make_batch(
