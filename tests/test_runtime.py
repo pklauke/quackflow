@@ -497,3 +497,104 @@ class TestDataExpiration:
 
         final_count = runtime._engine.query("SELECT COUNT(*) as cnt FROM events").to_pydict()["cnt"][0]
         assert final_count >= 2
+
+
+class TestMultiplePartitions:
+    @pytest.mark.asyncio
+    async def test_two_partitions_same_result_as_one(self):
+        """Running with 2 partitions should produce same results as 1 partition."""
+        time_notion = EventTimeNotion(column="event_time")
+        batch = make_batch(
+            [1, 2, 3, 4, 5],
+            ["alice", "bob", "alice", "bob", "bob"],
+            [
+                dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 1, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 2, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 3, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 6, tzinfo=dt.timezone.utc),
+            ],
+        )
+
+        # Run with 1 partition
+        source1 = FakeSource([batch], time_notion)
+        sink1 = FakeSink()
+
+        app1 = Quackflow()
+        app1.source("events", schema=EventSchema, ts_col="event_time")
+        app1.output(
+            "results",
+            "SELECT COUNT(*) as cnt, window_end FROM HOP('events', 'event_time', INTERVAL '5 minutes') GROUP BY window_end",
+            schema=CountSchema,
+        ).trigger(window=dt.timedelta(minutes=5))
+
+        runtime1 = Runtime(app1, sources={"events": source1}, sinks={"results": sink1}, num_partitions=1)
+        await runtime1.execute(
+            start=dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+            end=dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc),
+        )
+
+        # Run with 2 partitions
+        source2 = FakeSource([batch], time_notion)
+        sink2 = FakeSink()
+
+        app2 = Quackflow()
+        app2.source("events", schema=EventSchema, ts_col="event_time")
+        app2.output(
+            "results",
+            "SELECT COUNT(*) as cnt, window_end FROM HOP('events', 'event_time', INTERVAL '5 minutes') GROUP BY window_end",
+            schema=CountSchema,
+        ).trigger(window=dt.timedelta(minutes=5))
+
+        runtime2 = Runtime(app2, sources={"events": source2}, sinks={"results": sink2}, num_partitions=2)
+        await runtime2.execute(
+            start=dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+            end=dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc),
+        )
+
+        # Both should produce the same count
+        result1 = sink1.to_dicts()
+        result2 = sink2.to_dicts()
+
+        total1 = sum(row["cnt"] for batch in result1 for row in batch)
+        total2 = sum(row["cnt"] for batch in result2 for row in batch)
+
+        assert total1 == 4, f"1 partition should count 4, got {total1}"
+        assert total2 == total1, f"2 partitions should match 1 partition: {total2} vs {total1}"
+
+    @pytest.mark.asyncio
+    async def test_partitions_dont_duplicate_output(self):
+        """With shared engine, multiple output partitions shouldn't duplicate results."""
+        time_notion = EventTimeNotion(column="event_time")
+        batch = make_batch(
+            [1, 2, 3, 4, 5],
+            ["alice", "bob", "alice", "bob", "bob"],
+            [
+                dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 1, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 2, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 3, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 6, tzinfo=dt.timezone.utc),
+            ],
+        )
+
+        source = FakeSource([batch], time_notion)
+        sink = FakeSink()
+
+        app = Quackflow()
+        app.source("events", schema=EventSchema, ts_col="event_time")
+        app.output(
+            "results",
+            "SELECT * FROM events",
+            schema=EventSchema,
+        ).trigger(records=1)
+
+        runtime = Runtime(app, sources={"events": source}, sinks={"results": sink}, num_partitions=2)
+        await runtime.execute(
+            start=dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+            end=dt.datetime(2024, 1, 1, 10, 10, tzinfo=dt.timezone.utc),
+        )
+
+        # Should NOT have duplicates - each row should appear once
+        total_rows = sum(b.num_rows for b in sink.batches)
+        assert total_rows == 5, f"Expected 5 rows (no duplicates), got {total_rows}"
