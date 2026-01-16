@@ -44,7 +44,7 @@ class QuackflowFlightServer(flight.FlightServerBase):
         # Read the chunk with metadata
         chunk = reader.read_chunk()
         metadata_bytes = chunk.app_metadata
-        metadata = json.loads(metadata_bytes.decode())
+        metadata = json.loads(bytes(metadata_bytes).decode())
 
         msg_type = metadata["msg_type"]
         sender_id = metadata["sender_id"]
