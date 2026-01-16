@@ -40,33 +40,41 @@ class DistributedWorkerOrchestrator:
         self.sources = sources
         self.sinks = sinks
 
-        self.engine = Engine()
         self.tasks: dict[str, Task] = {}
         self.flight_server: QuackflowFlightServer | None = None
         self.client_pool = FlightClientPool()
         self._loop: asyncio.AbstractEventLoop | None = None
 
+    def _create_engine_for_task(self, task_config) -> Engine:
+        """Create a dedicated engine for a task with required tables/views."""
+        user_dag = self.cluster_config.user_dag
+        engine = Engine()
+
+        # Create tables and views needed by this task
+        for node in user_dag.nodes:
+            if node.node_type == "source":
+                decl: SourceDeclaration = node.declaration  # type: ignore
+                engine.create_table(node.name, decl.schema)
+            elif node.node_type == "view":
+                decl: ViewDeclaration = node.declaration  # type: ignore
+                engine.create_view(node.name, decl.sql)
+
+        return engine
+
     def setup(self) -> None:
         """Initialize tables, views, tasks, and wiring."""
         user_dag = self.cluster_config.user_dag
         exec_dag = self.cluster_config.exec_dag
-
-        # Create tables and views (all workers need full schema)
-        for node in user_dag.nodes:
-            if node.node_type == "source":
-                decl: SourceDeclaration = node.declaration  # type: ignore
-                self.engine.create_table(node.name, decl.schema)
-            elif node.node_type == "view":
-                decl: ViewDeclaration = node.declaration  # type: ignore
-                self.engine.create_view(node.name, decl.sql)
-
         max_window_size = self._compute_max_window_size()
 
-        # Create only tasks assigned to this worker
+        # Create only tasks assigned to this worker, each with its own engine
         for task_id in self.worker_info.task_ids:
             task_config = exec_dag.get_task(task_id)
             node = user_dag.get_node(task_config.node_name)
-            task = Task(task_config, node.declaration, self.engine)
+            engine = self._create_engine_for_task(task_config)
+            task = Task(task_config, node.declaration, engine)
+            task.set_num_partitions(exec_dag.num_partitions)
+            task.set_propagate_batch(True)
 
             if isinstance(node.declaration, SourceDeclaration):
                 if task_config.node_name in self.sources:
@@ -101,9 +109,11 @@ class DistributedWorkerOrchestrator:
             # Different worker - Arrow Flight
             worker = self.cluster_config.get_worker_for_task(target_id)
             assert worker is not None, f"No worker found for task {target_id}"
+            target_config = self.cluster_config.exec_dag.get_task(target_id)
             return RemoteDownstreamHandle(
                 sender_id=sender_id,
                 target_task_id=target_id,
+                target_repartition_key=target_config.repartition_key,
                 target_host=worker.host,
                 target_port=worker.port,
                 client_pool=self.client_pool,

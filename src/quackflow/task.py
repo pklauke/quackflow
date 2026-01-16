@@ -10,6 +10,7 @@ import pyarrow as pa
 
 from quackflow.app import OutputDeclaration, SourceDeclaration, ViewDeclaration
 from quackflow.execution import TaskConfig
+from quackflow.repartition import repartition
 from quackflow.transport import (
     DownstreamHandle,
     ExpirationMessage,
@@ -58,6 +59,10 @@ class Task:
         self._max_window_size: dt.timedelta = dt.timedelta(0)
         self._downstream_thresholds: dict[str, dt.datetime] = {}
 
+        # Distributed mode settings
+        self._num_partitions: int = 1
+        self._propagate_batch: bool = False  # Whether to include batch in messages
+
     def set_source(self, source: "Source") -> None:
         self._source = source
 
@@ -66,6 +71,12 @@ class Task:
 
     def set_max_window_size(self, size: dt.timedelta) -> None:
         self._max_window_size = size
+
+    def set_num_partitions(self, num_partitions: int) -> None:
+        self._num_partitions = num_partitions
+
+    def set_propagate_batch(self, enabled: bool) -> None:
+        self._propagate_batch = enabled
 
     @property
     def effective_watermark(self) -> dt.datetime | None:
@@ -114,9 +125,36 @@ class Task:
                     self.engine.insert(self.config.node_name, batch)
                     watermark = source.watermark
                     if watermark is not None:
-                        message = WatermarkMessage(watermark=watermark, num_rows=batch.num_rows)
+                        # Check if any handle needs repartitioning
+                        own_key = (
+                            self.declaration.partition_by if isinstance(self.declaration, SourceDeclaration) else None
+                        )
+                        repartition_key = None
                         for handle in self.downstream_handles:
-                            await handle.send(message)
+                            target_key = handle.target_repartition_key
+                            if target_key and (own_key is None or set(target_key) != set(own_key)):
+                                repartition_key = target_key
+                                break
+
+                        if repartition_key:
+                            partitioned = repartition(batch, repartition_key, self._num_partitions)
+                            for handle in self.downstream_handles:
+                                partition_batch = partitioned.get(handle.target_partition_id)
+                                if partition_batch is not None:
+                                    message = WatermarkMessage(
+                                        watermark=watermark,
+                                        num_rows=partition_batch.num_rows,
+                                        batch=partition_batch if self._propagate_batch else None,
+                                    )
+                                    await handle.send(message)
+                        else:
+                            message = WatermarkMessage(
+                                watermark=watermark,
+                                num_rows=batch.num_rows,
+                                batch=batch if self._propagate_batch else None,
+                            )
+                            for handle in self.downstream_handles:
+                                await handle.send(message)
 
                 if batch.num_rows == 0:
                     await asyncio.sleep(0.01)
@@ -134,6 +172,12 @@ class Task:
             _fmt_wm(message.watermark),
             message.num_rows,
         )
+
+        # In distributed mode, insert received batch into our engine
+        if message.batch is not None:
+            table_name = upstream_id.split("[")[0]
+            self.engine.insert(table_name, message.batch)
+
         old_effective = self.effective_watermark
         self._state.upstream_watermarks[upstream_id] = message.watermark
         self._state.upstream_records[upstream_id] = self._state.upstream_records.get(upstream_id, 0) + message.num_rows

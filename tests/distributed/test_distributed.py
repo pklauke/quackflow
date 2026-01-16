@@ -42,7 +42,9 @@ class TestDistributedBasic:
         ).trigger(records=1)
 
         results = run_cluster(app, partition_batch(team_red_data))
-        totals = collect_totals(results, name_col="team")
 
-        # All scores sum to: 5 + 7 + 3 + 4 + 8 + 3 + 9 + 8 + 1 = 48
-        assert totals["red"] == 48
+        # "red" hashes to partition 0, so only ONE output should produce results
+        # with the complete sum of 48 (not two outputs with partial sums)
+        assert len(results) == 1, f"Expected 1 result batch, got {len(results)}"
+        assert results[0].column("team")[0].as_py() == "red"
+        assert results[0].column("total")[0].as_py() == 48

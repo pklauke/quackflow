@@ -50,22 +50,24 @@ def team_red_data():
     Partition 0: alice, bob, dave, eve
     Partition 1: charlie, leo, nick
     """
-    return pa.RecordBatch.from_pydict({
-        "name": ["alice", "bob", "leo", "dave", "alice", "nick", "charlie", "eve", "nick"],
-        "team": ["red"] * 9,
-        "score": [5, 7, 3, 4, 8, 3, 9, 8, 1],
-        "event_time": [
-            ts(0, 23),   # alice: 12:00:23
-            ts(2, 26),   # bob:   12:02:26
-            ts(3, 30),   # leo:   12:03:30
-            ts(4, 17),   # dave:  12:04:17
-            ts(3, 5),    # alice: 12:03:05
-            ts(6, 38),   # nick:  12:06:38
-            ts(1, 27),   # charlie: 12:01:27
-            ts(7, 25),   # eve:   12:07:25
-            ts(7, 47),   # nick:  12:07:47
-        ],
-    })
+    return pa.RecordBatch.from_pydict(
+        {
+            "name": ["alice", "bob", "leo", "dave", "alice", "nick", "charlie", "eve", "nick"],
+            "team": ["red"] * 9,
+            "score": [5, 7, 3, 4, 8, 3, 9, 8, 1],
+            "event_time": [
+                ts(0, 23),  # alice: 12:00:23
+                ts(2, 26),  # bob:   12:02:26
+                ts(3, 30),  # leo:   12:03:30
+                ts(4, 17),  # dave:  12:04:17
+                ts(3, 5),  # alice: 12:03:05
+                ts(6, 38),  # nick:  12:06:38
+                ts(1, 27),  # charlie: 12:01:27
+                ts(7, 25),  # eve:   12:07:25
+                ts(7, 47),  # nick:  12:07:47
+            ],
+        }
+    )
 
 
 @pytest.fixture
@@ -82,10 +84,7 @@ def run_cluster(time_notion):
         debug: bool = True,
     ) -> list[pa.RecordBatch]:
         """Run cluster and return collected sink results."""
-        sources = {
-            pid: {"scores": FakeSource(batches, time_notion)}
-            for pid, batches in batches_by_partition.items()
-        }
+        sources = {pid: {"scores": FakeSource(batches, time_notion)} for pid, batches in batches_by_partition.items()}
         sinks = {pid: {"results": FakeSink()} for pid in batches_by_partition}
 
         cluster = launch_distributed_cluster(
@@ -108,7 +107,9 @@ def run_cluster(time_notion):
         cluster.shutdown()
 
 
-def partition_batch(batch: pa.RecordBatch, key: str = "name", num_partitions: int = 2) -> dict[int, list[pa.RecordBatch]]:
+def partition_batch(
+    batch: pa.RecordBatch, key: str = "name", num_partitions: int = 2
+) -> dict[int, list[pa.RecordBatch]]:
     """Partition a batch and wrap each in a list."""
     partitioned = repartition(batch, [key], num_partitions)
     return {pid: [b] for pid, b in partitioned.items()}
