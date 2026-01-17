@@ -14,6 +14,18 @@ class DataPacket:
     watermark: dt.datetime
 
 
+@dataclass
+class TriggerConfig:
+    """Trigger configuration for when a task should fire."""
+
+    window: dt.timedelta | None = None
+    records: int | None = None
+
+
+# Default records trigger for sources/views (framework-defined batching)
+DEFAULT_RECORDS_TRIGGER = 1000
+
+
 class SourceDeclaration:
     def __init__(
         self,
@@ -26,6 +38,7 @@ class SourceDeclaration:
         self.schema = schema
         self.partition_by = partition_by
         self.ts_col = ts_col
+        self.trigger: TriggerConfig | None = None  # Set during inference
 
 
 class ViewDeclaration:
@@ -42,6 +55,7 @@ class ViewDeclaration:
         self.depends_on = depends_on
         self.window_sizes = window_sizes
         self.partition_by = partition_by
+        self.trigger: TriggerConfig | None = None  # Set during inference
 
 
 SECONDS_PER_DAY = 86400
@@ -304,4 +318,49 @@ class Quackflow:
             for dep_name in declaration.depends_on:
                 dag.connect(dep_name, name)
 
+        self._infer_triggers(dag)
+
         return dag
+
+    def _infer_triggers(self, dag: DAG) -> None:
+        """Infer triggers for sources and views based on downstream outputs."""
+        # Process nodes in reverse topological order (outputs first, then upstream)
+        # Using BFS from outputs going upstream
+        processed: set[str] = set()
+
+        def get_trigger_from_downstream(node: Node) -> TriggerConfig:
+            """Compute trigger config based on downstream requirements."""
+            min_window: dt.timedelta | None = None
+
+            for downstream in node.downstream:
+                downstream_decl = downstream.declaration
+
+                # Get downstream's window trigger
+                if isinstance(downstream_decl, OutputDeclaration):
+                    window = downstream_decl.trigger_window
+                else:
+                    # Source or View - use inferred trigger
+                    window = downstream_decl.trigger.window if downstream_decl.trigger else None
+
+                if window is not None:
+                    if min_window is None or window < min_window:
+                        min_window = window
+
+            return TriggerConfig(window=min_window, records=DEFAULT_RECORDS_TRIGGER)
+
+        # Process outputs first (they have user-defined triggers, no inference needed)
+        for node in dag.output_nodes():
+            processed.add(node.name)
+
+        # Process remaining nodes layer by layer, going upstream
+        to_process = [n for n in dag.nodes if n.name not in processed]
+        while to_process:
+            # Find nodes whose downstream are all processed
+            ready = [n for n in to_process if all(d.name in processed for d in n.downstream)]
+
+            for node in ready:
+                trigger = get_trigger_from_downstream(node)
+                node.declaration.trigger = trigger
+                processed.add(node.name)
+
+            to_process = [n for n in to_process if n.name not in processed]

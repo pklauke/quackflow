@@ -45,14 +45,19 @@ class SingleWorkerOrchestrator:
             node = self.user_dag.get_node(task_config.node_name)
             task = Task(task_config, node.declaration, self.engine)
 
-            if isinstance(node.declaration, SourceDeclaration):
-                if task_config.node_name in self.sources:
-                    task.set_source(self.sources[task_config.node_name])
-
+            # Set trigger from declaration
             if isinstance(node.declaration, OutputDeclaration):
+                task.set_trigger(node.declaration.trigger_window, node.declaration.trigger_records)
                 if task_config.node_name in self.sinks:
                     task.set_sink(self.sinks[task_config.node_name])
                 task.set_max_window_size(max_window_size)
+            elif node.declaration.trigger is not None:
+                # Source or View with inferred trigger
+                task.set_trigger(node.declaration.trigger.window, node.declaration.trigger.records)
+
+            if isinstance(node.declaration, SourceDeclaration):
+                if task_config.node_name in self.sources:
+                    task.set_source(self.sources[task_config.node_name])
 
             self.tasks[task_config.task_id] = task
 

@@ -63,6 +63,10 @@ class Task:
         self._num_partitions: int = 1
         self._propagate_batch: bool = False  # Whether to include batch in messages
 
+        # Trigger settings (from declaration or inferred)
+        self._trigger_window: dt.timedelta | None = None
+        self._trigger_records: int | None = None
+
     def set_source(self, source: "Source") -> None:
         self._source = source
 
@@ -77,6 +81,10 @@ class Task:
 
     def set_propagate_batch(self, enabled: bool) -> None:
         self._propagate_batch = enabled
+
+    def set_trigger(self, window: dt.timedelta | None, records: int | None) -> None:
+        self._trigger_window = window
+        self._trigger_records = records
 
     @property
     def effective_watermark(self) -> dt.datetime | None:
@@ -99,9 +107,8 @@ class Task:
         return min(self._downstream_thresholds.values())
 
     def initialize(self, start: dt.datetime) -> None:
-        if isinstance(self.declaration, OutputDeclaration):
-            if self.declaration.trigger_window is not None:
-                self._state.last_fired_window = self._snap_to_window(start)
+        if self._trigger_window is not None:
+            self._state.last_fired_window = self._snap_to_window(start)
 
     async def run_source(self, start: dt.datetime, end: dt.datetime | None) -> None:
         from quackflow.source import ReplayableSource
@@ -184,17 +191,12 @@ class Task:
         new_effective = self.effective_watermark
 
         if new_effective is not None and (old_effective is None or new_effective > old_effective):
-            if self.config.node_type == "output":
-                if self._should_fire():
-                    await self._fire()
-            else:
-                forward_message = WatermarkMessage(
-                    watermark=new_effective,
-                    num_rows=message.num_rows,
-                    batch=message.batch,
-                )
-                for handle in self.downstream_handles:
-                    await handle.send(forward_message)
+            if isinstance(self.declaration, ViewDeclaration) and not self._propagate_batch:
+                # Single-worker mode: views forward watermarks directly (engine has actual DuckDB view)
+                await self._forward_watermark(message)
+            elif self._should_fire():
+                # Distributed mode or output: check trigger and fire
+                await self._fire()
 
     async def receive_expiration(self, downstream_id: str, message: ExpirationMessage) -> None:
         logger.debug("%s <- %s: EXPIRATION %s", self.config.task_id, downstream_id, _fmt_wm(message.threshold))
@@ -206,14 +208,13 @@ class Task:
             await self._handle_expiration(new_threshold)
 
     def _should_fire(self) -> bool:
-        if not isinstance(self.declaration, OutputDeclaration):
-            return False
-
-        if self.declaration.trigger_records is not None:
-            if self.total_records - self._state.records_at_last_fire >= self.declaration.trigger_records:
+        # Check records trigger
+        if self._trigger_records is not None:
+            if self.total_records - self._state.records_at_last_fire >= self._trigger_records:
                 return True
 
-        if self.declaration.trigger_window is not None:
+        # Check window trigger
+        if self._trigger_window is not None:
             watermark = self.effective_watermark
             if watermark is not None and self._state.last_fired_window is not None:
                 current_window = self._snap_to_window(watermark)
@@ -223,31 +224,76 @@ class Task:
         return False
 
     async def _fire(self) -> None:
-        if not isinstance(self.declaration, OutputDeclaration):
-            return
-
         self._state.records_at_last_fire = self.total_records
 
+        # Set batch window parameters if window trigger is configured
         target = None
-        if self.declaration.trigger_window is not None and self.effective_watermark is not None:
+        if self._trigger_window is not None and self.effective_watermark is not None:
             target = self._snap_to_window(self.effective_watermark)
 
-        if self.declaration.trigger_window is not None and self._state.last_fired_window is not None:
-            batch_start = self._state.last_fired_window - self._max_window_size + self.declaration.trigger_window
-            batch_end = (
-                target if target is not None else self._state.last_fired_window + self.declaration.trigger_window
-            )
+        if self._trigger_window is not None and self._state.last_fired_window is not None:
+            batch_start = self._state.last_fired_window - self._max_window_size + self._trigger_window
+            batch_end = target if target is not None else self._state.last_fired_window + self._trigger_window
             self._state.last_fired_window = batch_end
             self.engine.set_batch_start(batch_start)
             self.engine.set_batch_end(batch_end)
-            self.engine.set_window_hop(self.declaration.trigger_window)
+            self.engine.set_window_hop(self._trigger_window)
 
-        result = self.engine.query(self.declaration.sql)
-        await self._emit_by_window(result)
-        await self.propagate_expiration()
+        if isinstance(self.declaration, OutputDeclaration):
+            # Output: query, write to sink, propagate expiration
+            result = self.engine.query(self.declaration.sql)
+            await self._emit_by_window(result)
+            await self.propagate_expiration()
+        elif isinstance(self.declaration, ViewDeclaration):
+            # View: query, send transformed result downstream
+            result = self.engine.query(self.declaration.sql)
+            await self._send_downstream(result)
+
+    async def _send_downstream(self, batch: pa.RecordBatch) -> None:
+        """Send a batch to all downstream handles (used by views after firing)."""
+        if batch.num_rows == 0:
+            return
+
+        watermark = self.effective_watermark
+        if watermark is None:
+            return
+
+        # Check if repartitioning is needed
+        own_key = self.declaration.partition_by if isinstance(self.declaration, ViewDeclaration) else None
+        repartition_key = None
+        for handle in self.downstream_handles:
+            target_key = handle.target_repartition_key
+            if target_key and (own_key is None or set(target_key) != set(own_key)):
+                repartition_key = target_key
+                break
+
+        if repartition_key:
+            partitioned = repartition(batch, repartition_key, self._num_partitions)
+            for handle in self.downstream_handles:
+                partition_batch = partitioned.get(handle.target_partition_id)
+                if partition_batch is not None:
+                    message = WatermarkMessage(
+                        watermark=watermark,
+                        num_rows=partition_batch.num_rows,
+                        batch=partition_batch if self._propagate_batch else None,
+                    )
+                    await handle.send(message)
+        else:
+            message = WatermarkMessage(
+                watermark=watermark,
+                num_rows=batch.num_rows,
+                batch=batch if self._propagate_batch else None,
+            )
+            for handle in self.downstream_handles:
+                await handle.send(message)
+
+    async def _forward_watermark(self, message: WatermarkMessage) -> None:
+        """Forward watermark to downstream handles (single-worker mode for views)."""
+        for handle in self.downstream_handles:
+            await handle.send(message)
 
     async def final_fire(self) -> None:
-        if self.config.node_type == "output" and self._should_fire():
+        if self._should_fire():
             await self._fire()
 
     async def propagate_expiration(self) -> None:
@@ -305,10 +351,10 @@ class Task:
             await self._sink.write(batch)
 
     def _snap_to_window(self, watermark: dt.datetime) -> dt.datetime:
-        if not isinstance(self.declaration, OutputDeclaration) or self.declaration.trigger_window is None:
+        if self._trigger_window is None:
             return watermark
 
-        window_seconds = int(self.declaration.trigger_window.total_seconds())
+        window_seconds = int(self._trigger_window.total_seconds())
         midnight = watermark.replace(hour=0, minute=0, second=0, microsecond=0)
         seconds_since_midnight = (watermark - midnight).total_seconds()
         snapped_seconds = int(seconds_since_midnight // window_seconds) * window_seconds
