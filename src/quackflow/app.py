@@ -29,7 +29,7 @@ class SourceDeclaration:
         self.schema = schema
         self.partition_by = partition_by
         self.ts_col = ts_col
-        self.trigger: TriggerConfig | None = None  # Set during inference
+        self._trigger: TriggerConfig | None = None  # Set during inference
 
 
 class ViewDeclaration:
@@ -46,7 +46,7 @@ class ViewDeclaration:
         self.depends_on = depends_on
         self.window_sizes = window_sizes
         self.partition_by = partition_by
-        self.trigger: TriggerConfig | None = None  # Set during inference
+        self._trigger: TriggerConfig | None = None  # Set during inference
 
 
 SECONDS_PER_DAY = 86400
@@ -68,8 +68,7 @@ class OutputDeclaration:
         self.depends_on = depends_on
         self.window_sizes = window_sizes
         self.partition_by = partition_by
-        self.trigger_window: dt.timedelta | None = None
-        self.trigger_records: int | None = None
+        self._trigger: TriggerConfig | None = None
 
     def trigger(
         self,
@@ -81,9 +80,13 @@ class OutputDeclaration:
             if window_seconds <= 0:
                 raise ValueError("Window must be positive")
             if SECONDS_PER_DAY % window_seconds != 0:
-                raise ValueError(f"Window must divide evenly into a day (86400 seconds), got {window_seconds}s")
-        self.trigger_window = window
-        self.trigger_records = records
+                raise ValueError(
+                    f"Window of {window_seconds}s doesn't divide evenly into 24 hours. "
+                    f"Windows align to midnight boundaries (e.g., 00:00, 00:05, 00:10 for 5-minute windows), "
+                    f"so window duration must divide 86400 seconds evenly. "
+                    f"Try a window like 1s, 5s, 10s, 15s, 30s, 1min, 5min, 10min, 15min, 30min, or 1h."
+                )
+        self._trigger = TriggerConfig(window=window, records=records)
         return self
 
 
@@ -134,13 +137,17 @@ class Quackflow:
         schema: type[Schema],
         partition_by: list[str] | None = None,
         ts_col: str | None = None,
-    ) -> None:
-        self.sources[name] = SourceDeclaration(name, schema, partition_by, ts_col)
+    ) -> SourceDeclaration:
+        declaration = SourceDeclaration(name, schema, partition_by, ts_col)
+        self.sources[name] = declaration
+        return declaration
 
-    def view(self, name: str, sql: str, *, partition_by: list[str] | None = None) -> None:
+    def view(self, name: str, sql: str, *, partition_by: list[str] | None = None) -> ViewDeclaration:
         depends_on = self._resolve_dependencies(sql)
         window_sizes = extract_hop_window_sizes(sql)
-        self.views[name] = ViewDeclaration(name, sql, depends_on, window_sizes, partition_by)
+        declaration = ViewDeclaration(name, sql, depends_on, window_sizes, partition_by)
+        self.views[name] = declaration
+        return declaration
 
     def output(
         self,
@@ -186,11 +193,11 @@ class Quackflow:
 
     def compile(self) -> DAG:
         for declaration in self.outputs.values():
-            if declaration.trigger_window is None and declaration.trigger_records is None:
+            if declaration._trigger is None:
                 raise ValueError("All outputs must have a trigger (window or records)")
 
-            if declaration.trigger_window is not None and declaration.window_sizes:
-                hop_seconds = int(declaration.trigger_window.total_seconds())
+            if declaration._trigger.window is not None and declaration.window_sizes:
+                hop_seconds = int(declaration._trigger.window.total_seconds())
                 for window_size in declaration.window_sizes:
                     size_seconds = int(window_size.total_seconds())
                     if size_seconds % hop_seconds != 0:
@@ -245,11 +252,7 @@ class Quackflow:
                 downstream_decl = downstream.declaration
 
                 # Get downstream's window trigger
-                if isinstance(downstream_decl, OutputDeclaration):
-                    window = downstream_decl.trigger_window
-                else:
-                    # Source or View - use inferred trigger
-                    window = downstream_decl.trigger.window if downstream_decl.trigger else None
+                window = downstream_decl._trigger.window if downstream_decl._trigger else None
 
                 if window is not None:
                     if min_window is None or window < min_window:
@@ -269,7 +272,7 @@ class Quackflow:
 
             for node in ready:
                 trigger = get_trigger_from_downstream(node)
-                node.declaration.trigger = trigger
+                node.declaration._trigger = trigger
                 processed.add(node.name)
 
             to_process = [n for n in to_process if n.name not in processed]

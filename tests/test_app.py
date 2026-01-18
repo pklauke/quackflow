@@ -50,7 +50,7 @@ class TestQuackflowTrigger:
 
         app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(window=dt.timedelta(minutes=5))
 
-        assert app.outputs["results"].trigger_window == dt.timedelta(minutes=5)
+        assert app.outputs["results"]._trigger.window == dt.timedelta(minutes=5)
 
     def test_output_with_records_trigger(self):
         app = Quackflow()
@@ -58,7 +58,7 @@ class TestQuackflowTrigger:
 
         app.output("results", "SELECT * FROM events", schema=EventSchema).trigger(records=100)
 
-        assert app.outputs["results"].trigger_records == 100
+        assert app.outputs["results"]._trigger.records == 100
 
     def test_output_with_combined_trigger(self):
         app = Quackflow()
@@ -68,8 +68,8 @@ class TestQuackflowTrigger:
             window=dt.timedelta(minutes=1), records=10000
         )
 
-        assert app.outputs["results"].trigger_window == dt.timedelta(minutes=1)
-        assert app.outputs["results"].trigger_records == 10000
+        assert app.outputs["results"]._trigger.window == dt.timedelta(minutes=1)
+        assert app.outputs["results"]._trigger.records == 10000
 
     def test_window_must_divide_day_evenly(self):
         app = Quackflow()

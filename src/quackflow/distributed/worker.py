@@ -77,14 +77,13 @@ class DistributedWorkerOrchestrator:
             task.set_propagate_batch(True)
 
             # Set trigger from declaration
+            if node.declaration._trigger is not None:
+                task.set_trigger(node.declaration._trigger.window, node.declaration._trigger.records)
+
             if isinstance(node.declaration, OutputDeclaration):
-                task.set_trigger(node.declaration.trigger_window, node.declaration.trigger_records)
                 if task_config.node_name in self.sinks:
                     task.set_sink(self.sinks[task_config.node_name])
                 task.set_max_window_size(max_window_size)
-            elif node.declaration.trigger is not None:
-                # Source or View with inferred trigger
-                task.set_trigger(node.declaration.trigger.window, node.declaration.trigger.records)
 
             if isinstance(node.declaration, SourceDeclaration):
                 if task_config.node_name in self.sources:
@@ -148,8 +147,8 @@ class DistributedWorkerOrchestrator:
             elif node.node_type == "output":
                 decl: OutputDeclaration = node.declaration  # type: ignore
                 all_window_sizes.extend(decl.window_sizes)
-                if decl.trigger_window is not None:
-                    all_window_sizes.append(decl.trigger_window)
+                if decl._trigger is not None and decl._trigger.window is not None:
+                    all_window_sizes.append(decl._trigger.window)
         return max(all_window_sizes, default=dt.timedelta(0))
 
     async def run(self, start: dt.datetime, end: dt.datetime | None) -> None:
