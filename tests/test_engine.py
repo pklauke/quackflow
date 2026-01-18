@@ -2,7 +2,7 @@ import datetime as dt
 
 import pyarrow as pa
 
-from quackflow.engine import Engine
+from quackflow._internal.engine import Engine
 from quackflow.schema import Int, Schema, String, Timestamp
 
 

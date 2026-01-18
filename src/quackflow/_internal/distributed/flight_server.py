@@ -8,11 +8,11 @@ from typing import TYPE_CHECKING
 
 import pyarrow.flight as flight
 
-from quackflow.distributed.flight_client import MSG_TYPE_EXPIRATION, MSG_TYPE_WATERMARK
-from quackflow.transport import ExpirationMessage, WatermarkMessage
+from quackflow._internal.distributed.flight_client import MSG_TYPE_EXPIRATION, MSG_TYPE_WATERMARK
+from quackflow._internal.transport import ExpirationMessage, WatermarkMessage
 
 if TYPE_CHECKING:
-    from quackflow.task import Task
+    from quackflow._internal.task import Task
 
 logger = logging.getLogger(__name__)
 

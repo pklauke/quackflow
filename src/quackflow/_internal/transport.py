@@ -8,8 +8,8 @@ from typing import TYPE_CHECKING, Protocol
 import pyarrow as pa
 
 if TYPE_CHECKING:
-    from quackflow.distributed.flight_client import FlightClientPool
-    from quackflow.task import Task
+    from quackflow._internal.distributed.flight_client import FlightClientPool
+    from quackflow._internal.task import Task
 
 
 @dataclass

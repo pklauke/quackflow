@@ -2,7 +2,7 @@ import datetime as dt
 from dataclasses import dataclass
 
 from quackflow.schema import Schema
-from quackflow.sql import extract_hop_sources, extract_hop_window_sizes, extract_tables, has_group_by
+from quackflow._internal.sql import extract_hop_sources, extract_hop_window_sizes, extract_tables, has_group_by
 
 
 @dataclass

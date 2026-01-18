@@ -3,7 +3,7 @@ import datetime as dt
 import duckdb
 import pytest
 
-from quackflow.window import register_window_functions
+from quackflow._internal.window import register_window_functions
 
 
 @pytest.fixture

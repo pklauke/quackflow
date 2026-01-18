@@ -4,12 +4,12 @@ import datetime as dt
 from typing import TYPE_CHECKING
 
 from quackflow.app import DAG, OutputDeclaration, SourceDeclaration, ViewDeclaration
-from quackflow.execution import ExecutionDAG
-from quackflow.task import Task
-from quackflow.transport import LocalDownstreamHandle, LocalUpstreamHandle
+from quackflow._internal.execution import ExecutionDAG
+from quackflow._internal.task import Task
+from quackflow._internal.transport import LocalDownstreamHandle, LocalUpstreamHandle
 
 if TYPE_CHECKING:
-    from quackflow.engine import Engine
+    from quackflow._internal.engine import Engine
     from quackflow.sink import Sink
     from quackflow.source import Source
 

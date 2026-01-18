@@ -6,7 +6,7 @@ import json
 import pyarrow as pa
 import pyarrow.flight as flight
 
-from quackflow.transport import ExpirationMessage, WatermarkMessage
+from quackflow._internal.transport import ExpirationMessage, WatermarkMessage
 
 # Message type discriminators
 MSG_TYPE_WATERMARK = 1

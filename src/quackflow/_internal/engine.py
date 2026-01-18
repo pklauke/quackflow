@@ -4,7 +4,7 @@ import duckdb
 import pyarrow as pa
 
 from quackflow.schema import Schema
-from quackflow.window import register_window_functions
+from quackflow._internal.window import register_window_functions
 
 
 class Engine:

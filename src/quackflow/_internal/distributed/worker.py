@@ -8,12 +8,12 @@ from typing import TYPE_CHECKING
 import pyarrow.flight as flight
 
 from quackflow.app import OutputDeclaration, SourceDeclaration, ViewDeclaration
-from quackflow.distributed.config import ClusterConfig, WorkerInfo
-from quackflow.distributed.flight_client import FlightClientPool
-from quackflow.distributed.flight_server import QuackflowFlightServer
-from quackflow.engine import Engine
-from quackflow.task import Task
-from quackflow.transport import (
+from quackflow._internal.distributed.config import ClusterConfig, WorkerInfo
+from quackflow._internal.distributed.flight_client import FlightClientPool
+from quackflow._internal.distributed.flight_server import QuackflowFlightServer
+from quackflow._internal.engine import Engine
+from quackflow._internal.task import Task
+from quackflow._internal.transport import (
     LocalDownstreamHandle,
     LocalUpstreamHandle,
     RemoteDownstreamHandle,

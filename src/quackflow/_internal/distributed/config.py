@@ -3,7 +3,7 @@
 from dataclasses import dataclass, field
 
 from quackflow.app import DAG
-from quackflow.execution import ExecutionDAG
+from quackflow._internal.execution import ExecutionDAG
 
 
 @dataclass

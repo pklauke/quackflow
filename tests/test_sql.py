@@ -1,4 +1,4 @@
-from quackflow.sql import extract_tables
+from quackflow._internal.sql import extract_tables
 
 
 class TestExtractTables:

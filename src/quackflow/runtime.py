@@ -4,8 +4,8 @@ import datetime as dt
 import typing
 
 from quackflow.app import Quackflow
-from quackflow.engine import Engine
-from quackflow.execution import ExecutionDAG
+from quackflow._internal.engine import Engine
+from quackflow._internal.execution import ExecutionDAG
 from quackflow.source import Source
 
 if typing.TYPE_CHECKING:
@@ -30,7 +30,7 @@ class Runtime:
 
     async def execute(self, start: dt.datetime, end: dt.datetime | None = None) -> None:
         """Execute the pipeline with parallel tasks."""
-        from quackflow.worker import SingleWorkerOrchestrator
+        from quackflow._internal.worker import SingleWorkerOrchestrator
 
         # Compile user DAG and build execution DAG
         user_dag = self._app.compile()

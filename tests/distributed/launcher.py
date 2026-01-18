@@ -8,9 +8,9 @@ from multiprocessing import Queue
 from typing import TYPE_CHECKING
 
 from quackflow.app import Quackflow
-from quackflow.distributed.config import ClusterConfig, WorkerInfo, assign_tasks_to_workers
-from quackflow.distributed.worker import DistributedWorkerOrchestrator
-from quackflow.execution import ExecutionDAG
+from quackflow._internal.distributed.config import ClusterConfig, WorkerInfo, assign_tasks_to_workers
+from quackflow._internal.distributed.worker import DistributedWorkerOrchestrator
+from quackflow._internal.execution import ExecutionDAG
 
 if TYPE_CHECKING:
     from quackflow.sink import Sink

@@ -1,7 +1,7 @@
 import pyarrow as pa
 import pytest
 
-from quackflow.repartition import compute_partition, repartition
+from quackflow._internal.repartition import compute_partition, repartition
 
 
 class TestComputePartition:

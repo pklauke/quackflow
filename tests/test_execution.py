@@ -1,7 +1,7 @@
 import pytest
 
 from quackflow.app import Quackflow
-from quackflow.execution import ExecutionDAG
+from quackflow._internal.execution import ExecutionDAG
 from quackflow.schema import Int, Schema, String, Timestamp
 
 

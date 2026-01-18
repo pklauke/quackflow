@@ -18,9 +18,8 @@ Quackflow lets you build real-time data pipelines using SQL. Define sources, tra
 
 ```python
 import datetime as dt
-from quackflow import Quackflow, Runtime
-from quackflow.schema import Schema, String, Int, Float, Timestamp
-from quackflow.kafka import KafkaSource, KafkaSink
+from quackflow import Quackflow, Runtime, Schema, String, Int, Float, Timestamp
+from quackflow.kafka import KafkaSource, KafkaSink  # hypothetical
 
 # Define schemas
 class Order(Schema):

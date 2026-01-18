@@ -5,7 +5,7 @@ import datetime as dt
 import pyarrow as pa
 import pytest
 
-from quackflow.repartition import repartition
+from quackflow._internal.repartition import repartition
 from quackflow.schema import Int, Schema, String, Timestamp
 from quackflow.testing import FakeSink, FakeSource
 from quackflow.time_notion import EventTimeNotion

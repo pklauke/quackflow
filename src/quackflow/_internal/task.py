@@ -9,9 +9,9 @@ from typing import TYPE_CHECKING
 import pyarrow as pa
 
 from quackflow.app import OutputDeclaration, SourceDeclaration, ViewDeclaration
-from quackflow.execution import TaskConfig
-from quackflow.repartition import repartition
-from quackflow.transport import (
+from quackflow._internal.execution import TaskConfig
+from quackflow._internal.repartition import repartition
+from quackflow._internal.transport import (
     DownstreamHandle,
     ExpirationMessage,
     UpstreamHandle,
@@ -26,7 +26,7 @@ def _fmt_wm(watermark: dt.datetime) -> str:
 
 
 if TYPE_CHECKING:
-    from quackflow.engine import Engine
+    from quackflow._internal.engine import Engine
     from quackflow.sink import Sink
     from quackflow.source import ReplayableSource, Source
 
