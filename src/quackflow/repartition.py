@@ -63,29 +63,3 @@ def repartition(
             result[partition_id] = partition_batch
 
     return result
-
-
-def repartition_table(
-    table: pa.Table,
-    keys: list[str],
-    num_partitions: int,
-) -> dict[int, pa.Table]:
-    """
-    Hash partition a table by the given keys.
-
-    Args:
-        table: Input table
-        keys: Column names to partition by
-        num_partitions: Number of output partitions
-
-    Returns:
-        Dictionary mapping partition_id -> table for that partition
-    """
-    if table.num_rows == 0:
-        return {}
-
-    # Convert to single batch for efficiency
-    batch = table.to_batches()[0] if table.num_batches == 1 else table.combine_chunks().to_batches()[0]
-    partitioned_batches = repartition(batch, keys, num_partitions)
-
-    return {pid: pa.Table.from_batches([b]) for pid, b in partitioned_batches.items()}

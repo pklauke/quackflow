@@ -41,9 +41,6 @@ class ExecutionDAG:
     def output_tasks(self) -> list[TaskConfig]:
         return [t for t in self.tasks.values() if t.node_type == "output"]
 
-    def tasks_for_node(self, node_name: str) -> list[TaskConfig]:
-        return [t for t in self.tasks.values() if t.node_name == node_name]
-
     @classmethod
     def from_user_dag(cls, dag: DAG, num_partitions: int) -> "ExecutionDAG":
         """Convert user DAG to execution DAG with parallelization."""

@@ -25,14 +25,6 @@ class FakeSource:
     def watermark(self) -> dt.datetime | None:
         return self._watermark
 
-    @property
-    def started(self) -> bool:
-        return self._started
-
-    @property
-    def stopped(self) -> bool:
-        return self._stopped
-
     async def start(self) -> None:
         self._started = True
 

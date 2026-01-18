@@ -376,9 +376,3 @@ class Task:
             message = ExpirationMessage(threshold=final_threshold)
             for handle in self.upstream_handles:
                 await handle.send(message)
-
-    def checkpoint(self) -> TaskState:
-        return self._state
-
-    def restore(self, state: TaskState) -> None:
-        self._state = state
