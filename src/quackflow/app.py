@@ -4,6 +4,9 @@ from dataclasses import dataclass
 from quackflow.schema import Schema
 from quackflow._internal.sql import extract_hop_sources, extract_hop_window_sizes, extract_tables, has_group_by
 
+DEFAULT_RECORDS_TRIGGER = 1000
+SECONDS_PER_DAY = 86400
+
 
 @dataclass
 class TriggerConfig:
@@ -11,10 +14,6 @@ class TriggerConfig:
 
     window: dt.timedelta | None = None
     records: int | None = None
-
-
-# Default records trigger for sources/views (framework-defined batching)
-DEFAULT_RECORDS_TRIGGER = 1000
 
 
 class SourceDeclaration:
@@ -47,9 +46,6 @@ class ViewDeclaration:
         self.window_sizes = window_sizes
         self.partition_by = partition_by
         self._trigger: TriggerConfig | None = None  # Set during inference
-
-
-SECONDS_PER_DAY = 86400
 
 
 class OutputDeclaration:

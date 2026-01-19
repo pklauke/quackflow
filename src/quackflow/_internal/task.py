@@ -18,17 +18,12 @@ from quackflow._internal.transport import (
     WatermarkMessage,
 )
 
-logger = logging.getLogger(__name__)
-
-
-def _fmt_wm(watermark: dt.datetime) -> str:
-    return watermark.strftime("%H:%M:%S")
-
-
 if TYPE_CHECKING:
     from quackflow._internal.engine import Engine
     from quackflow.sink import Sink
     from quackflow.source import ReplayableSource, Source
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -37,6 +32,10 @@ class TaskState:
     upstream_records: dict[str, int] = field(default_factory=dict)
     last_fired_window: dt.datetime | None = None
     records_at_last_fire: int = 0
+
+
+def _fmt_wm(watermark: dt.datetime) -> str:
+    return watermark.strftime("%H:%M:%S")
 
 
 class Task:
