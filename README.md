@@ -19,7 +19,7 @@ Quackflow lets you build real-time data pipelines using SQL. Define sources, tra
 ```python
 import datetime as dt
 from quackflow import Quackflow, Runtime, Schema, String, Int, Float, Timestamp
-from quackflow.kafka import KafkaSource, KafkaSink  # hypothetical
+from quackflow.connectors.kafka import KafkaSource
 
 # Define schemas
 class Order(Schema):
@@ -53,8 +53,15 @@ app.output("category_revenue", """
 """, schema=CategoryRevenue).trigger(window=dt.timedelta(hours=1))
 
 # Run
-source = KafkaSource("localhost:9092", "orders")
-sink = KafkaSink("localhost:9092", "category-revenue")
+from quackflow import EventTimeNotion
+
+source = KafkaSource(
+    topic="orders",
+    time_notion=EventTimeNotion(column="order_time"),
+    bootstrap_servers="localhost:9092",
+    group_id="quackflow-orders",
+    schema=Order,
+)
 
 runtime = Runtime(app, sources={"orders": source}, sinks={"category_revenue": sink})
 await runtime.execute(start=dt.datetime.now(dt.timezone.utc))
