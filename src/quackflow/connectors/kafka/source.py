@@ -66,7 +66,7 @@ class KafkaSource:
                     "auto.offset.reset": self._auto_offset_reset,
                 }
             )
-        self._consumer.subscribe([self._topic])
+        await asyncio.to_thread(self._consumer.subscribe, [self._topic])
 
     async def read(self) -> pa.RecordBatch:
         messages: list[dict[str, Any]] = []
@@ -94,15 +94,15 @@ class KafkaSource:
 
     async def stop(self) -> None:
         if self._consumer is not None:
-            self._consumer.close()
+            await asyncio.to_thread(self._consumer.close)
 
     async def seek(self, timestamp: dt.datetime) -> None:
         from confluent_kafka import TopicPartition
 
-        assignment = self._consumer.assignment()
+        assignment = await asyncio.to_thread(self._consumer.assignment)
         ts_ms = int(timestamp.timestamp() * 1000)
         partitions = [TopicPartition(tp.topic, tp.partition, ts_ms) for tp in assignment]
         offsets = await asyncio.to_thread(self._consumer.offsets_for_times, partitions)
         for tp in offsets:
             if tp.offset >= 0:
-                self._consumer.seek(tp)
+                await asyncio.to_thread(self._consumer.seek, tp)
