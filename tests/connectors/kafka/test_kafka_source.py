@@ -8,14 +8,14 @@ import pytest
 from quackflow.connectors.kafka.source import KafkaSource
 from quackflow.schema import Schema, String, Timestamp
 from quackflow.source import ReplayableSource, Source
-from quackflow.time_notion import EventTimeNotion
+from quackflow.time_notion import EventTimeNotion, ProcessingTimeNotion
 
 from .conftest import FakeKafkaConsumer, FakeKafkaMessage
 
 TIMESTAMP_TYPE = 1
 
 
-def json_deserializer(data: bytes) -> dict[str, Any]:
+def value_deserializer(data: bytes, topic: str) -> dict[str, Any]:
     obj = json.loads(data.decode("utf-8"))
     if "timestamp" in obj and isinstance(obj["timestamp"], str):
         obj["timestamp"] = dt.datetime.fromisoformat(obj["timestamp"])
@@ -120,7 +120,7 @@ class TestRead:
             bootstrap_servers="localhost:9092",
             group_id="test-group",
             schema=TestSchema,
-            deserializer=json_deserializer,
+            value_deserializer=value_deserializer,
             _consumer=consumer,
         )
 
@@ -146,7 +146,7 @@ class TestRead:
             bootstrap_servers="localhost:9092",
             group_id="test-group",
             schema=TestSchema,
-            deserializer=json_deserializer,
+            value_deserializer=value_deserializer,
             _consumer=consumer,
         )
 
@@ -191,7 +191,7 @@ class TestRead:
             group_id="test-group",
             schema=TestSchema,
             batch_size=3,
-            deserializer=json_deserializer,
+            value_deserializer=value_deserializer,
             _consumer=consumer,
         )
 
@@ -218,7 +218,7 @@ class TestWatermark:
             bootstrap_servers="localhost:9092",
             group_id="test-group",
             schema=TestSchema,
-            deserializer=json_deserializer,
+            value_deserializer=value_deserializer,
             _consumer=consumer,
         )
 
@@ -243,7 +243,7 @@ class TestWatermark:
             bootstrap_servers="localhost:9092",
             group_id="test-group",
             schema=TestSchema,
-            deserializer=json_deserializer,
+            value_deserializer=value_deserializer,
             _consumer=consumer,
         )
 
@@ -270,7 +270,7 @@ class TestWatermark:
             bootstrap_servers="localhost:9092",
             group_id="test-group",
             schema=TestSchema,
-            deserializer=json_deserializer,
+            value_deserializer=value_deserializer,
             _consumer=consumer,
         )
 
@@ -321,7 +321,7 @@ class TestErrorHandling:
             bootstrap_servers="localhost:9092",
             group_id="test-group",
             schema=TestSchema,
-            deserializer=json_deserializer,
+            value_deserializer=value_deserializer,
             _consumer=consumer,
         )
 
@@ -330,3 +330,173 @@ class TestErrorHandling:
 
         assert batch.num_rows == 1
         assert batch.to_pydict()["id"] == ["good"]
+
+
+class TestDeserializers:
+    @pytest.mark.asyncio
+    async def test_value_deserializer_receives_topic(self):
+        ts = dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.timezone.utc)
+        messages = [
+            FakeKafkaMessage(
+                value=json.dumps({"id": "1", "timestamp": ts.isoformat()}).encode(),
+                timestamp=(TIMESTAMP_TYPE, int(ts.timestamp() * 1000)),
+            )
+        ]
+        consumer = FakeKafkaConsumer(messages)
+        received_topics: list[str] = []
+
+        def tracking_deserializer(data: bytes, topic: str) -> dict[str, Any]:
+            received_topics.append(topic)
+            return value_deserializer(data, topic)
+
+        source = KafkaSource(
+            topic="my-topic",
+            time_notion=EventTimeNotion(column="timestamp"),
+            bootstrap_servers="localhost:9092",
+            group_id="test-group",
+            schema=TestSchema,
+            value_deserializer=tracking_deserializer,
+            _consumer=consumer,
+        )
+
+        await source.start()
+        await source.read()
+
+        assert received_topics == ["my-topic"]
+
+    @pytest.mark.asyncio
+    async def test_key_deserializer_adds_key_to_record(self):
+        ts = dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.timezone.utc)
+        messages = [
+            FakeKafkaMessage(
+                value=json.dumps({"id": "1", "timestamp": ts.isoformat()}).encode(),
+                key=json.dumps({"user_id": "u123", "region": "us"}).encode(),
+                timestamp=(TIMESTAMP_TYPE, int(ts.timestamp() * 1000)),
+            )
+        ]
+        consumer = FakeKafkaConsumer(messages)
+        source = KafkaSource(
+            topic="test",
+            time_notion=EventTimeNotion(column="timestamp"),
+            bootstrap_servers="localhost:9092",
+            group_id="test-group",
+            schema=TestSchema,
+            value_deserializer=value_deserializer,
+            key_deserializer=lambda b, _: json.loads(b.decode("utf-8")),
+            _consumer=consumer,
+        )
+
+        await source.start()
+        batch = await source.read()
+
+        assert batch.to_pydict()["__key"] == [{"user_id": "u123", "region": "us"}]
+        assert batch.to_pydict()["id"] == ["1"]
+
+    @pytest.mark.asyncio
+    async def test_key_deserializer_receives_topic(self):
+        ts = dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.timezone.utc)
+        messages = [
+            FakeKafkaMessage(
+                value=json.dumps({"id": "1", "timestamp": ts.isoformat()}).encode(),
+                key=json.dumps({"user_id": "u123"}).encode(),
+                timestamp=(TIMESTAMP_TYPE, int(ts.timestamp() * 1000)),
+            )
+        ]
+        consumer = FakeKafkaConsumer(messages)
+        received_topics: list[str] = []
+
+        def tracking_key_deserializer(data: bytes, topic: str) -> dict[str, Any]:
+            received_topics.append(topic)
+            return json.loads(data.decode("utf-8"))
+
+        source = KafkaSource(
+            topic="my-topic",
+            time_notion=EventTimeNotion(column="timestamp"),
+            bootstrap_servers="localhost:9092",
+            group_id="test-group",
+            schema=TestSchema,
+            value_deserializer=value_deserializer,
+            key_deserializer=tracking_key_deserializer,
+            _consumer=consumer,
+        )
+
+        await source.start()
+        await source.read()
+
+        assert received_topics == ["my-topic"]
+
+    @pytest.mark.asyncio
+    async def test_no_key_when_no_key_deserializer(self):
+        ts = dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.timezone.utc)
+        messages = [
+            FakeKafkaMessage(
+                value=json.dumps({"id": "1", "timestamp": ts.isoformat()}).encode(),
+                key=b"some-key",
+                timestamp=(TIMESTAMP_TYPE, int(ts.timestamp() * 1000)),
+            )
+        ]
+        consumer = FakeKafkaConsumer(messages)
+        source = KafkaSource(
+            topic="test",
+            time_notion=EventTimeNotion(column="timestamp"),
+            bootstrap_servers="localhost:9092",
+            group_id="test-group",
+            schema=TestSchema,
+            value_deserializer=value_deserializer,
+            _consumer=consumer,
+        )
+
+        await source.start()
+        batch = await source.read()
+
+        assert "__key" not in batch.to_pydict()
+
+    @pytest.mark.asyncio
+    async def test_default_json_value_deserializer(self):
+        messages = [
+            FakeKafkaMessage(
+                value=json.dumps({"id": "1", "name": "test"}).encode(),
+                timestamp=(TIMESTAMP_TYPE, 1704110400000),
+            )
+        ]
+        consumer = FakeKafkaConsumer(messages)
+        source = KafkaSource(
+            topic="test",
+            time_notion=ProcessingTimeNotion(),
+            bootstrap_servers="localhost:9092",
+            group_id="test-group",
+            schema=TestSchema,
+            _consumer=consumer,
+        )
+
+        await source.start()
+        batch = await source.read()
+
+        assert batch.to_pydict()["id"] == ["1"]
+
+    @pytest.mark.asyncio
+    async def test_null_key_skipped(self):
+        ts = dt.datetime(2024, 1, 1, 12, 0, tzinfo=dt.timezone.utc)
+        messages = [
+            FakeKafkaMessage(
+                value=json.dumps({"id": "1", "timestamp": ts.isoformat()}).encode(),
+                key=None,
+                timestamp=(TIMESTAMP_TYPE, int(ts.timestamp() * 1000)),
+            )
+        ]
+        consumer = FakeKafkaConsumer(messages)
+        source = KafkaSource(
+            topic="test",
+            time_notion=EventTimeNotion(column="timestamp"),
+            bootstrap_servers="localhost:9092",
+            group_id="test-group",
+            schema=TestSchema,
+            value_deserializer=value_deserializer,
+            key_deserializer=lambda b, _: json.loads(b.decode("utf-8")),
+            _consumer=consumer,
+        )
+
+        await source.start()
+        batch = await source.read()
+
+        assert batch.to_pydict().get("__key") in [None, [None]]

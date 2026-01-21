@@ -13,6 +13,10 @@ from quackflow.time_notion import TimeNotion
 logger = logging.getLogger(__name__)
 
 
+def _default_json_deserializer(data: bytes, topic: str) -> dict[str, Any]:
+    return json.loads(data.decode("utf-8"))
+
+
 class KafkaSource:
     def __init__(
         self,
@@ -25,7 +29,8 @@ class KafkaSource:
         auto_offset_reset: str = "earliest",
         poll_timeout: float = 1.0,
         batch_size: int = 1000,
-        deserializer: Callable[[bytes], dict[str, Any]] | None = None,  # TODO
+        value_deserializer: Callable[[bytes, str], dict[str, Any]] | None = None,
+        key_deserializer: Callable[[bytes, str], Any] | None = None,
         _consumer: Any = None,
     ):
         from quackflow.connectors.kafka import _check_kafka_deps
@@ -40,7 +45,8 @@ class KafkaSource:
         self._auto_offset_reset = auto_offset_reset
         self._poll_timeout = poll_timeout
         self._batch_size = batch_size
-        self._deserializer = deserializer or (lambda b: json.loads(b.decode("utf-8")))
+        self._value_deserializer = value_deserializer or _default_json_deserializer
+        self._key_deserializer = key_deserializer
         self._watermark: dt.datetime | None = None
         self._consumer = _consumer
 
@@ -78,7 +84,13 @@ class KafkaSource:
             if msg.error():
                 continue
             try:
-                data = self._deserializer(msg.value())
+                data = self._value_deserializer(msg.value(), self._topic)
+                if self._key_deserializer is not None:
+                    key_bytes = msg.key()
+                    if key_bytes is not None:
+                        data["__key"] = self._key_deserializer(key_bytes, self._topic)
+                    else:
+                        data["__key"] = None
                 messages.append(data)
             except Exception:
                 logger.warning("Failed to deserialize message, skipping")
@@ -88,7 +100,7 @@ class KafkaSource:
             field_names = list(self._schema.fields().keys())
             return pa.RecordBatch.from_pydict({name: [] for name in field_names})
 
-        batch = pa.RecordBatch.from_pylist(messages)  # TODO inefficient? only pylist?
+        batch = pa.RecordBatch.from_pylist(messages)
         self._update_watermark(batch)
         return batch
 

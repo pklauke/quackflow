@@ -2,13 +2,23 @@ from typing import Any
 
 
 class FakeKafkaMessage:
-    def __init__(self, value: bytes, timestamp: tuple[int, int], error: Any = None):
+    def __init__(
+        self,
+        value: bytes,
+        timestamp: tuple[int, int],
+        key: bytes | None = None,
+        error: Any = None,
+    ):
         self._value = value
         self._timestamp = timestamp
+        self._key = key
         self._error = error
 
     def value(self) -> bytes:
         return self._value
+
+    def key(self) -> bytes | None:
+        return self._key
 
     def timestamp(self) -> tuple[int, int]:
         return self._timestamp
