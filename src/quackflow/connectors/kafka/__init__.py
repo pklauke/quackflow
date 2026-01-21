@@ -5,6 +5,15 @@ def _check_kafka_deps() -> None:
         raise ImportError("KafkaSource requires 'confluent-kafka'. Install with: pip install quackflow[kafka]") from e
 
 
-from quackflow.connectors.kafka.source import KafkaSource  # noqa: E402
+from quackflow.connectors.kafka.deserializers import (  # noqa: E402
+    ConfluentAvroDeserializer,
+    JsonDeserializer,
+)
+from quackflow.connectors.kafka.source import Deserializer, KafkaSource  # noqa: E402
 
-__all__ = ["KafkaSource"]
+__all__ = [
+    "ConfluentAvroDeserializer",
+    "Deserializer",
+    "JsonDeserializer",
+    "KafkaSource",
+]

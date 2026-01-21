@@ -1,20 +1,21 @@
 import asyncio
 import datetime as dt
-import json
 import logging
-from collections.abc import Callable
+import typing
 from typing import Any
 
 import pyarrow as pa
 
+from quackflow.connectors.kafka.deserializers import JsonDeserializer
 from quackflow.schema import Schema
 from quackflow.time_notion import TimeNotion
 
 logger = logging.getLogger(__name__)
 
 
-def _default_json_deserializer(data: bytes, topic: str) -> dict[str, Any]:
-    return json.loads(data.decode("utf-8"))
+@typing.runtime_checkable
+class Deserializer(typing.Protocol):
+    def __call__(self, data: bytes, topic: str) -> Any: ...
 
 
 class KafkaSource:
@@ -29,8 +30,8 @@ class KafkaSource:
         auto_offset_reset: str = "earliest",
         poll_timeout: float = 1.0,
         batch_size: int = 1000,
-        value_deserializer: Callable[[bytes, str], dict[str, Any]] | None = None,
-        key_deserializer: Callable[[bytes, str], Any] | None = None,
+        value_deserializer: Deserializer | None = None,
+        key_deserializer: Deserializer | None = None,
         _consumer: Any = None,
     ):
         from quackflow.connectors.kafka import _check_kafka_deps
@@ -45,7 +46,7 @@ class KafkaSource:
         self._auto_offset_reset = auto_offset_reset
         self._poll_timeout = poll_timeout
         self._batch_size = batch_size
-        self._value_deserializer = value_deserializer or _default_json_deserializer
+        self._value_deserializer = value_deserializer or JsonDeserializer()
         self._key_deserializer = key_deserializer
         self._watermark: dt.datetime | None = None
         self._consumer = _consumer
