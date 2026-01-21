@@ -1,4 +1,71 @@
+from dataclasses import dataclass
 from typing import Any
+
+from confluent_kafka.schema_registry import Schema
+
+
+@dataclass
+class FakeRegisteredSchema:
+    """Fake registered schema returned by FakeSchemaRegistryClient."""
+
+    schema_id: int
+    schema: Schema
+    subject: str
+    version: int
+    guid: str | None = None
+
+
+class FakeSchemaRegistryClient:
+    """In-memory Schema Registry for testing without network calls."""
+
+    def __init__(self) -> None:
+        self._schemas: dict[int, Schema] = {}
+        self._subjects: dict[str, int] = {}
+        self._versions: dict[str, int] = {}
+        self._next_id = 1
+
+    def register_schema(self, subject: str, schema: Schema) -> int:
+        if subject in self._subjects:
+            return self._subjects[subject]
+        schema_id = self._next_id
+        self._next_id += 1
+        self._schemas[schema_id] = schema
+        self._subjects[subject] = schema_id
+        self._versions[subject] = 1
+        return schema_id
+
+    def register_schema_full_response(
+        self,
+        subject: str,
+        schema: Schema,
+        normalize_schemas: bool = False,
+    ) -> FakeRegisteredSchema:
+        schema_id = self.register_schema(subject, schema)
+        return FakeRegisteredSchema(
+            schema_id=schema_id,
+            schema=schema,
+            subject=subject,
+            version=self._versions[subject],
+        )
+
+    def get_schema(
+        self,
+        schema_id: int,
+        subject: str | None = None,
+        fmt: str | None = None,
+    ) -> Schema:
+        return self._schemas[schema_id]
+
+    def get_latest_version(self, subject: str) -> FakeRegisteredSchema | None:
+        if subject not in self._subjects:
+            return None
+        schema_id = self._subjects[subject]
+        return FakeRegisteredSchema(
+            schema_id=schema_id,
+            schema=self._schemas[schema_id],
+            subject=subject,
+            version=self._versions[subject],
+        )
 
 
 class FakeKafkaMessage:
@@ -57,3 +124,24 @@ class FakeKafkaConsumer:
 
     def seek(self, partition: Any) -> None:
         pass
+
+
+class FakeKafkaProducer:
+    def __init__(self) -> None:
+        self._messages: list[dict[str, Any]] = []
+        self._flushed = False
+
+    def produce(
+        self,
+        topic: str,
+        value: bytes | None = None,
+        key: bytes | None = None,
+    ) -> None:
+        self._messages.append({"topic": topic, "value": value, "key": key})
+
+    def poll(self, timeout: float = 0) -> int:
+        return 0
+
+    def flush(self, timeout: float | None = None) -> int:
+        self._flushed = True
+        return 0

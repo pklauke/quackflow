@@ -14,12 +14,19 @@ Quackflow lets you build real-time data pipelines using SQL. Define sources, tra
 - **Built-in backpressure**: Watermark-based flow control across the entire DAG
 - **Distributed mode**: Scale out with Arrow Flight for inter-worker communication
 
+## Installation
+
+```bash
+pip install quackflow           # Core only
+pip install quackflow[kafka]    # With Kafka support
+```
+
 ## Quick start
 
 ```python
 import datetime as dt
 from quackflow import Quackflow, Runtime, Schema, String, Int, Float, Timestamp
-from quackflow.connectors.kafka import KafkaSource
+from quackflow.connectors.kafka import KafkaSource, KafkaSink
 
 # Define schemas
 class Order(Schema):
@@ -61,6 +68,11 @@ source = KafkaSource(
     bootstrap_servers="localhost:9092",
     group_id="quackflow-orders",
     schema=Order,
+)
+
+sink = KafkaSink(
+    topic="category-revenue",
+    bootstrap_servers="localhost:9092",
 )
 
 runtime = Runtime(app, sources={"orders": source}, sinks={"category_revenue": sink})

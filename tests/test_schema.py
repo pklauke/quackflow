@@ -128,3 +128,92 @@ class TestComplexTypes:
         fields = WithLocations.fields()
 
         assert fields["locations"].duckdb_type == "STRUCT(lat DOUBLE, lon DOUBLE)[]"
+
+
+class TestAvroGeneration:
+    def test_string_to_avro(self):
+        assert String().to_avro_type() == "string"
+
+    def test_int_to_avro(self):
+        assert Int().to_avro_type() == "int"
+
+    def test_long_to_avro(self):
+        assert Long().to_avro_type() == "long"
+
+    def test_float_to_avro(self):
+        assert Float().to_avro_type() == "double"
+
+    def test_bool_to_avro(self):
+        assert Bool().to_avro_type() == "boolean"
+
+    def test_timestamp_to_avro(self):
+        assert Timestamp().to_avro_type() == {"type": "long", "logicalType": "timestamp-micros"}
+
+    def test_list_to_avro(self):
+        assert List(String()).to_avro_type() == {"type": "array", "items": "string"}
+
+    def test_nested_list_to_avro(self):
+        assert List(List(Int())).to_avro_type() == {
+            "type": "array",
+            "items": {"type": "array", "items": "int"},
+        }
+
+    def test_struct_to_avro(self):
+        result = Struct(lat=Float(), lon=Float()).to_avro_type()
+
+        assert result["type"] == "record"
+        assert result["name"] == "Struct"
+        assert {"name": "lat", "type": "double"} in result["fields"]
+        assert {"name": "lon", "type": "double"} in result["fields"]
+
+    def test_nullable_to_avro(self):
+        assert String(nullable=True).to_avro_type() == ["null", "string"]
+
+    def test_nullable_complex_to_avro(self):
+        result = List(String(), nullable=True).to_avro_type()
+
+        assert result == ["null", {"type": "array", "items": "string"}]
+
+    def test_schema_to_avro(self):
+        import json
+
+        class User(Schema):
+            id = Int()
+            name = String()
+
+        avro_str = User.to_avro()
+        avro = json.loads(avro_str)
+
+        assert avro["type"] == "record"
+        assert avro["name"] == "User"
+        assert {"name": "id", "type": "int"} in avro["fields"]
+        assert {"name": "name", "type": "string"} in avro["fields"]
+
+    def test_schema_to_avro_with_nullable(self):
+        import json
+
+        class Event(Schema):
+            id = Int()
+            metadata = String(nullable=True)
+
+        avro_str = Event.to_avro()
+        avro = json.loads(avro_str)
+
+        assert {"name": "id", "type": "int"} in avro["fields"]
+        assert {"name": "metadata", "type": ["null", "string"]} in avro["fields"]
+
+    def test_schema_to_avro_complex(self):
+        import json
+
+        class Location(Schema):
+            lat = Float()
+            lon = Float()
+            tags = List(String())
+
+        avro_str = Location.to_avro()
+        avro = json.loads(avro_str)
+
+        assert avro["name"] == "Location"
+        assert {"name": "lat", "type": "double"} in avro["fields"]
+        assert {"name": "lon", "type": "double"} in avro["fields"]
+        assert {"name": "tags", "type": {"type": "array", "items": "string"}} in avro["fields"]

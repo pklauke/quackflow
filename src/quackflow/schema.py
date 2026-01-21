@@ -1,4 +1,5 @@
 import datetime
+import json
 import typing
 
 
@@ -11,6 +12,7 @@ NO_DEFAULT = _NoDefault()
 
 class Field:
     _duckdb_type: str = ""
+    _avro_type: str | dict[str, typing.Any] = ""
 
     def __init__(self, *, nullable: bool = False, default: typing.Any = NO_DEFAULT):
         self.nullable = nullable
@@ -20,9 +22,16 @@ class Field:
     def duckdb_type(self) -> str:
         return self._duckdb_type
 
+    def to_avro_type(self) -> str | list[typing.Any] | dict[str, typing.Any]:
+        base_type = self._avro_type
+        if self.nullable:
+            return ["null", base_type]
+        return base_type
+
 
 class String(Field):
     _duckdb_type = "VARCHAR"
+    _avro_type = "string"
 
     def __init__(self, *, nullable: bool = False, default: str | _NoDefault = NO_DEFAULT):
         super().__init__(nullable=nullable, default=default)
@@ -30,6 +39,7 @@ class String(Field):
 
 class Int(Field):
     _duckdb_type = "INTEGER"
+    _avro_type = "int"
 
     def __init__(self, *, nullable: bool = False, default: int | _NoDefault = NO_DEFAULT):
         super().__init__(nullable=nullable, default=default)
@@ -37,6 +47,7 @@ class Int(Field):
 
 class Long(Field):
     _duckdb_type = "BIGINT"
+    _avro_type = "long"
 
     def __init__(self, *, nullable: bool = False, default: int | _NoDefault = NO_DEFAULT):
         super().__init__(nullable=nullable, default=default)
@@ -44,6 +55,7 @@ class Long(Field):
 
 class Float(Field):
     _duckdb_type = "DOUBLE"
+    _avro_type = "double"
 
     def __init__(self, *, nullable: bool = False, default: float | _NoDefault = NO_DEFAULT):
         super().__init__(nullable=nullable, default=default)
@@ -51,6 +63,7 @@ class Float(Field):
 
 class Bool(Field):
     _duckdb_type = "BOOLEAN"
+    _avro_type = "boolean"
 
     def __init__(self, *, nullable: bool = False, default: bool | _NoDefault = NO_DEFAULT):
         super().__init__(nullable=nullable, default=default)
@@ -58,6 +71,7 @@ class Bool(Field):
 
 class Timestamp(Field):
     _duckdb_type = "TIMESTAMP"
+    _avro_type: dict[str, typing.Any] = {"type": "long", "logicalType": "timestamp-micros"}
 
     def __init__(self, *, nullable: bool = False, default: datetime.datetime | _NoDefault = NO_DEFAULT):
         super().__init__(nullable=nullable, default=default)
@@ -78,6 +92,15 @@ class List(Field):
     def duckdb_type(self) -> str:
         return f"{self.element_type.duckdb_type}[]"
 
+    def to_avro_type(self) -> str | list[typing.Any] | dict[str, typing.Any]:
+        base_type: dict[str, typing.Any] = {
+            "type": "array",
+            "items": self.element_type.to_avro_type(),
+        }
+        if self.nullable:
+            return ["null", base_type]
+        return base_type
+
 
 class Struct(Field):
     def __init__(
@@ -94,6 +117,17 @@ class Struct(Field):
     def duckdb_type(self) -> str:
         parts = [f"{name} {field.duckdb_type}" for name, field in self.struct_fields.items()]
         return f"STRUCT({', '.join(parts)})"
+
+    def to_avro_type(self) -> str | list[typing.Any] | dict[str, typing.Any]:
+        fields = [{"name": name, "type": field.to_avro_type()} for name, field in self.struct_fields.items()]
+        base_type: dict[str, typing.Any] = {
+            "type": "record",
+            "name": "Struct",
+            "fields": fields,
+        }
+        if self.nullable:
+            return ["null", base_type]
+        return base_type
 
 
 class SchemaMeta(type):
@@ -126,3 +160,8 @@ class Schema(metaclass=SchemaMeta):
                 col += " NOT NULL"
             columns.append(col)
         return f"CREATE TABLE {table_name} ({', '.join(columns)})"
+
+    @classmethod
+    def to_avro(cls) -> str:
+        fields = [{"name": name, "type": field.to_avro_type()} for name, field in cls._fields.items()]
+        return json.dumps({"type": "record", "name": cls.__name__, "fields": fields})
