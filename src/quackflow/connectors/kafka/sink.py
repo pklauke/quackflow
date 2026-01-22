@@ -9,7 +9,7 @@ from quackflow.connectors.kafka.serializers import JsonSerializer
 
 @typing.runtime_checkable
 class Serializer(typing.Protocol):
-    def __call__(self, data: dict[str, Any], topic: str) -> bytes: ...
+    def __call__(self, data: dict[str, Any], topic: str, *, is_key: bool = False) -> bytes: ...
 
 
 class KafkaSink:
@@ -53,7 +53,7 @@ class KafkaSink:
             if self._key_serializer is not None and "__key" in row:
                 key_data = row.pop("__key")
                 if key_data is not None:
-                    key_bytes = self._key_serializer(key_data, self._topic)
+                    key_bytes = self._key_serializer(key_data, self._topic, is_key=True)
             elif "__key" in row:
                 row.pop("__key")
 

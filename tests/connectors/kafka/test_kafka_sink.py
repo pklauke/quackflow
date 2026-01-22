@@ -114,7 +114,7 @@ class TestKafkaSinkWrite:
 
         producer = FakeKafkaProducer()
 
-        def custom_serializer(data: dict, topic: str) -> bytes:
+        def custom_serializer(data: dict, topic: str, *, is_key: bool = False) -> bytes:
             return f"custom:{data['id']}".encode()
 
         sink = KafkaSink(
@@ -139,7 +139,7 @@ class TestKafkaSinkWrite:
 
         producer = FakeKafkaProducer()
 
-        def key_serializer(data: dict, topic: str) -> bytes:
+        def key_serializer(data: dict, topic: str, *, is_key: bool = False) -> bytes:
             return json.dumps(data).encode("utf-8")
 
         sink = KafkaSink(

@@ -15,7 +15,7 @@ from .conftest import FakeKafkaConsumer, FakeKafkaMessage
 TIMESTAMP_TYPE = 1
 
 
-def value_deserializer(data: bytes, topic: str) -> dict[str, Any]:
+def value_deserializer(data: bytes, topic: str, *, is_key: bool = False) -> dict[str, Any]:
     obj = json.loads(data.decode("utf-8"))
     if "timestamp" in obj and isinstance(obj["timestamp"], str):
         obj["timestamp"] = dt.datetime.fromisoformat(obj["timestamp"])
@@ -345,7 +345,7 @@ class TestDeserializers:
         consumer = FakeKafkaConsumer(messages)
         received_topics: list[str] = []
 
-        def tracking_deserializer(data: bytes, topic: str) -> dict[str, Any]:
+        def tracking_deserializer(data: bytes, topic: str, *, is_key: bool = False) -> dict[str, Any]:
             received_topics.append(topic)
             return value_deserializer(data, topic)
 
@@ -382,7 +382,7 @@ class TestDeserializers:
             group_id="test-group",
             schema=TestSchema,
             value_deserializer=value_deserializer,
-            key_deserializer=lambda b, _: json.loads(b.decode("utf-8")),
+            key_deserializer=lambda b, _, is_key=False: json.loads(b.decode("utf-8")),
             _consumer=consumer,
         )
 
@@ -405,7 +405,7 @@ class TestDeserializers:
         consumer = FakeKafkaConsumer(messages)
         received_topics: list[str] = []
 
-        def tracking_key_deserializer(data: bytes, topic: str) -> dict[str, Any]:
+        def tracking_key_deserializer(data: bytes, topic: str, *, is_key: bool = False) -> dict[str, Any]:
             received_topics.append(topic)
             return json.loads(data.decode("utf-8"))
 
@@ -492,7 +492,7 @@ class TestDeserializers:
             group_id="test-group",
             schema=TestSchema,
             value_deserializer=value_deserializer,
-            key_deserializer=lambda b, _: json.loads(b.decode("utf-8")),
+            key_deserializer=lambda b, _, is_key=False: json.loads(b.decode("utf-8")),
             _consumer=consumer,
         )
 

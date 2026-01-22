@@ -68,3 +68,39 @@ class TestConfluentAvroDeserializer:
         result = deserializer(data, "my-topic")
 
         assert result == {"id": "abc", "count": 42}
+
+    def test_uses_value_message_field_by_default(self):
+        from confluent_kafka.schema_registry import Schema
+        from confluent_kafka.serialization import MessageField
+
+        from quackflow.connectors.kafka.deserializers import ConfluentAvroDeserializer
+
+        mock_sr = Mock()
+        mock_sr.get_schema.return_value = Schema(json.dumps(AVRO_SCHEMA), "AVRO")
+
+        deserializer = ConfluentAvroDeserializer(mock_sr)
+        deserializer._deserializer = Mock(return_value={"id": "abc", "count": 42})
+        data = make_confluent_avro_bytes({"id": "abc", "count": 42}, AVRO_SCHEMA, schema_id=1)
+
+        deserializer(data, "my-topic")
+
+        ctx = deserializer._deserializer.call_args[0][1]
+        assert ctx.field == MessageField.VALUE
+
+    def test_uses_key_message_field_when_is_key_true(self):
+        from confluent_kafka.schema_registry import Schema
+        from confluent_kafka.serialization import MessageField
+
+        from quackflow.connectors.kafka.deserializers import ConfluentAvroDeserializer
+
+        mock_sr = Mock()
+        mock_sr.get_schema.return_value = Schema(json.dumps(AVRO_SCHEMA), "AVRO")
+
+        deserializer = ConfluentAvroDeserializer(mock_sr)
+        deserializer._deserializer = Mock(return_value={"id": "abc", "count": 42})
+        data = make_confluent_avro_bytes({"id": "abc", "count": 42}, AVRO_SCHEMA, schema_id=1)
+
+        deserializer(data, "my-topic", is_key=True)
+
+        ctx = deserializer._deserializer.call_args[0][1]
+        assert ctx.field == MessageField.KEY

@@ -8,7 +8,7 @@ if TYPE_CHECKING:
 class JsonDeserializer:
     """JSON deserializer."""
 
-    def __call__(self, data: bytes, topic: str) -> dict[str, Any]:
+    def __call__(self, data: bytes, topic: str, *, is_key: bool = False) -> dict[str, Any]:
         return json.loads(data.decode("utf-8"))
 
 
@@ -20,8 +20,9 @@ class ConfluentAvroDeserializer:
 
         self._deserializer: Any = AvroDeserializer(schema_registry)  # type: ignore[call-arg]
 
-    def __call__(self, data: bytes, topic: str) -> dict[str, Any]:
+    def __call__(self, data: bytes, topic: str, *, is_key: bool = False) -> dict[str, Any]:
         from confluent_kafka.serialization import SerializationContext, MessageField
 
-        result: dict[str, Any] = self._deserializer(data, SerializationContext(topic, MessageField.VALUE))
+        field = MessageField.KEY if is_key else MessageField.VALUE
+        result: dict[str, Any] = self._deserializer(data, SerializationContext(topic, field))
         return result

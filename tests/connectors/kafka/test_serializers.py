@@ -1,4 +1,5 @@
 import json
+from unittest.mock import Mock
 
 from quackflow.schema import Float, Int, Schema, String
 
@@ -61,3 +62,43 @@ class TestSerializerDeserializerRoundTrip:
         deserialized = deserializer(serialized, "topic")
 
         assert deserialized == original
+
+
+class TestConfluentAvroSerializerMessageField:
+    def test_uses_value_message_field_by_default(self):
+        from confluent_kafka.serialization import MessageField
+
+        from quackflow.connectors.kafka.serializers import ConfluentAvroSerializer
+
+        from .conftest import FakeSchemaRegistryClient
+
+        class TestSchema(Schema):
+            id = String()
+
+        sr = FakeSchemaRegistryClient()
+        serializer = ConfluentAvroSerializer(sr, schema=TestSchema)
+        serializer._serializer = Mock(return_value=b"fake")
+
+        serializer({"id": "abc"}, "my-topic")
+
+        ctx = serializer._serializer.call_args[0][1]
+        assert ctx.field == MessageField.VALUE
+
+    def test_uses_key_message_field_when_is_key_true(self):
+        from confluent_kafka.serialization import MessageField
+
+        from quackflow.connectors.kafka.serializers import ConfluentAvroSerializer
+
+        from .conftest import FakeSchemaRegistryClient
+
+        class TestSchema(Schema):
+            id = String()
+
+        sr = FakeSchemaRegistryClient()
+        serializer = ConfluentAvroSerializer(sr, schema=TestSchema)
+        serializer._serializer = Mock(return_value=b"fake")
+
+        serializer({"id": "abc"}, "my-topic", is_key=True)
+
+        ctx = serializer._serializer.call_args[0][1]
+        assert ctx.field == MessageField.KEY

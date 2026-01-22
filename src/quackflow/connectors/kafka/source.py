@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 @typing.runtime_checkable
 class Deserializer(typing.Protocol):
-    def __call__(self, data: bytes, topic: str) -> Any: ...
+    def __call__(self, data: bytes, topic: str, *, is_key: bool = False) -> Any: ...
 
 
 class KafkaSource:
@@ -92,7 +92,7 @@ class KafkaSource:
                 if self._key_deserializer is not None:
                     key_bytes = msg.key()
                     if key_bytes is not None:
-                        data["__key"] = self._key_deserializer(key_bytes, self._topic)
+                        data["__key"] = self._key_deserializer(key_bytes, self._topic, is_key=True)
                     else:
                         data["__key"] = None
                 messages.append(data)
