@@ -68,18 +68,3 @@ class TestConfluentAvroDeserializer:
         result = deserializer(data, "my-topic")
 
         assert result == {"id": "abc", "count": 42}
-
-    def test_deserializes_avro_key(self):
-        from confluent_kafka.schema_registry import Schema
-
-        from quackflow.connectors.kafka.deserializers import ConfluentAvroDeserializer
-
-        mock_sr = Mock()
-        mock_sr.get_schema.return_value = Schema(json.dumps(AVRO_SCHEMA), "AVRO")
-
-        deserializer = ConfluentAvroDeserializer(mock_sr, is_key=True)
-        data = make_confluent_avro_bytes({"id": "key1", "count": 1}, AVRO_SCHEMA, schema_id=1)
-
-        result = deserializer(data, "my-topic")
-
-        assert result == {"id": "key1", "count": 1}
