@@ -32,6 +32,7 @@ class KafkaSource:
         batch_size: int = 1000,
         value_deserializer: Deserializer | None = None,
         key_deserializer: Deserializer | None = None,
+        consumer_config: dict[str, Any] | None = None,
         _consumer: Any = None,
     ):
         from quackflow.connectors.kafka import _check_kafka_deps
@@ -48,6 +49,7 @@ class KafkaSource:
         self._batch_size = batch_size
         self._value_deserializer = value_deserializer or JsonDeserializer()
         self._key_deserializer = key_deserializer
+        self._consumer_config = consumer_config or {}
         self._watermark: dt.datetime | None = None
         self._consumer = _consumer
 
@@ -66,13 +68,13 @@ class KafkaSource:
         if self._consumer is None:
             from confluent_kafka import Consumer
 
-            self._consumer = Consumer(
-                {
-                    "bootstrap.servers": self._bootstrap_servers,
-                    "group.id": self._group_id,
-                    "auto.offset.reset": self._auto_offset_reset,
-                }
-            )
+            config = {
+                "bootstrap.servers": self._bootstrap_servers,
+                "group.id": self._group_id,
+                "auto.offset.reset": self._auto_offset_reset,
+                **self._consumer_config,
+            }
+            self._consumer = Consumer(config)
         await asyncio.to_thread(self._consumer.subscribe, [self._topic])
 
     async def read(self) -> pa.RecordBatch:
@@ -83,6 +85,7 @@ class KafkaSource:
             if msg is None:
                 break
             if msg.error():
+                logger.debug("Kafka message error: %s", msg.error())
                 continue
             try:
                 data = self._value_deserializer(msg.value(), self._topic)

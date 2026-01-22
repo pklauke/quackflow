@@ -20,6 +20,7 @@ class KafkaSink:
         *,
         value_serializer: Serializer | None = None,
         key_serializer: Serializer | None = None,
+        producer_config: dict[str, Any] | None = None,
         _producer: Any = None,
     ):
         from quackflow.connectors.kafka import _check_kafka_deps
@@ -30,13 +31,18 @@ class KafkaSink:
         self._bootstrap_servers = bootstrap_servers
         self._value_serializer = value_serializer or JsonSerializer()
         self._key_serializer = key_serializer
+        self._producer_config = producer_config or {}
         self._producer = _producer
 
     async def start(self) -> None:
         if self._producer is None:
             from confluent_kafka import Producer
 
-            self._producer = Producer({"bootstrap.servers": self._bootstrap_servers})
+            config = {
+                "bootstrap.servers": self._bootstrap_servers,
+                **self._producer_config,
+            }
+            self._producer = Producer(config)
 
     async def write(self, batch: pa.RecordBatch) -> None:
         rows = batch.to_pylist()
