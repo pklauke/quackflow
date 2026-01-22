@@ -85,12 +85,19 @@ class SingleWorkerOrchestrator:
     async def run(self, start: dt.datetime, end: dt.datetime | None) -> None:
         self.setup()
 
-        for task in self.tasks.values():
-            task.initialize(start)
+        for sink in self.sinks.values():
+            await sink.start()
 
-        for task in self.tasks.values():
-            if task.config.node_type == "source":
-                await task.run_source(start, end)
+        try:
+            for task in self.tasks.values():
+                task.initialize(start)
 
-        for task in self.tasks.values():
-            await task.final_fire()
+            for task in self.tasks.values():
+                if task.config.node_type == "source":
+                    await task.run_source(start, end)
+
+            for task in self.tasks.values():
+                await task.final_fire()
+        finally:
+            for sink in self.sinks.values():
+                await sink.stop()

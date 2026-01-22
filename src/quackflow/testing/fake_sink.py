@@ -5,8 +5,14 @@ class FakeSink:
     def __init__(self):
         self.batches: list[pa.RecordBatch] = []
 
+    async def start(self) -> None:
+        pass
+
     async def write(self, batch: pa.RecordBatch) -> None:
         self.batches.append(batch)
+
+    async def stop(self) -> None:
+        pass
 
     def to_dicts(self) -> list[list[dict]]:
         return [

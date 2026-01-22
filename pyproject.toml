@@ -73,3 +73,6 @@ venv = ".venv"
 testpaths = ["tests"]
 asyncio_mode = "auto"
 timeout = 5
+markers = [
+    "integration: marks tests as integration tests (require external services)",
+]

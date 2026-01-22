@@ -115,7 +115,18 @@ class KafkaSource:
     async def seek(self, timestamp: dt.datetime) -> None:
         from confluent_kafka import TopicPartition
 
-        assignment = await asyncio.to_thread(self._consumer.assignment)
+        # Wait for partition assignment (poll triggers rebalance)
+        assignment: list = []
+        for _ in range(30):  # Max 30 seconds
+            assignment = await asyncio.to_thread(self._consumer.assignment)
+            if assignment:
+                break
+            await asyncio.to_thread(self._consumer.poll, 1.0)
+
+        if not assignment:
+            logger.warning("No partition assignment received, skipping seek")
+            return
+
         ts_ms = int(timestamp.timestamp() * 1000)
         partitions = [TopicPartition(tp.topic, tp.partition, ts_ms) for tp in assignment]
         offsets = await asyncio.to_thread(self._consumer.offsets_for_times, partitions)

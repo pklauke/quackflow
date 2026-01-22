@@ -115,9 +115,9 @@ class Task:
         source = self._source
         assert source is not None
 
+        await source.start()
         if isinstance(source, ReplayableSource):
             await source.seek(start)
-        await source.start()
 
         try:
             while True:

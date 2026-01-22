@@ -94,6 +94,13 @@ class FakeKafkaMessage:
         return self._error
 
 
+@dataclass
+class FakeTopicPartition:
+    topic: str
+    partition: int
+    offset: int = -1
+
+
 class FakeKafkaConsumer:
     def __init__(self, messages: list[FakeKafkaMessage] | None = None):
         self._messages = list(messages) if messages else []
@@ -101,9 +108,11 @@ class FakeKafkaConsumer:
         self._subscribed_topics: list[str] = []
         self._closed = False
         self._offsets_for_times_called_with: list[Any] | None = None
+        self._assignment: list[FakeTopicPartition] = []
 
     def subscribe(self, topics: list[str]) -> None:
         self._subscribed_topics = topics
+        self._assignment = [FakeTopicPartition(topic=t, partition=0) for t in topics]
 
     def poll(self, timeout: float = 1.0) -> FakeKafkaMessage | None:
         if self._index >= len(self._messages):
@@ -115,8 +124,8 @@ class FakeKafkaConsumer:
     def close(self) -> None:
         self._closed = True
 
-    def assignment(self) -> list[Any]:
-        return []
+    def assignment(self) -> list[FakeTopicPartition]:
+        return self._assignment
 
     def offsets_for_times(self, partitions: list[Any], timeout: float | None = None) -> list[Any]:
         self._offsets_for_times_called_with = partitions
