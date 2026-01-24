@@ -75,6 +75,7 @@ class KafkaSource:
                 **self._consumer_config,
             }
             self._consumer = Consumer(config)
+
         await asyncio.to_thread(self._consumer.subscribe, [self._topic])
 
     async def read(self) -> pa.RecordBatch:
@@ -117,14 +118,14 @@ class KafkaSource:
 
         # Wait for partition assignment (poll triggers rebalance)
         assignment: list = []
-        for _ in range(30):  # Max 30 seconds
+        for _ in range(30):
             assignment = await asyncio.to_thread(self._consumer.assignment)
             if assignment:
                 break
             await asyncio.to_thread(self._consumer.poll, 1.0)
 
         if not assignment:
-            logger.warning("No partition assignment received, skipping seek")
+            logger.warning("No partition assignment received for %s, skipping seek", self._topic)
             return
 
         ts_ms = int(timestamp.timestamp() * 1000)

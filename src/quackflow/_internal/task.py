@@ -66,6 +66,8 @@ class Task:
         self._trigger_window: dt.timedelta | None = None
         self._trigger_records: int | None = None
 
+        self._ctx = engine.create_context()
+
     def set_source(self, source: "Source") -> None:
         self._source = source
 
@@ -128,7 +130,7 @@ class Task:
 
                 batch = await source.read()
                 if batch.num_rows > 0:
-                    self.engine.insert(self.config.node_name, batch)
+                    await asyncio.to_thread(self._ctx.insert, self.config.node_name, batch)
                     watermark = source.watermark
                     if watermark is not None:
                         # Check if any handle needs repartitioning
@@ -182,7 +184,7 @@ class Task:
         # In distributed mode, insert received batch into our engine
         if message.batch is not None:
             table_name = upstream_id.split("[")[0]
-            self.engine.insert(table_name, message.batch)
+            self._ctx.insert(table_name, message.batch)
 
         old_effective = self.effective_watermark
         self._state.upstream_watermarks[upstream_id] = message.watermark
@@ -234,18 +236,16 @@ class Task:
             batch_start = self._state.last_fired_window - self._max_window_size + self._trigger_window
             batch_end = target if target is not None else self._state.last_fired_window + self._trigger_window
             self._state.last_fired_window = batch_end
-            self.engine.set_batch_start(batch_start)
-            self.engine.set_batch_end(batch_end)
-            self.engine.set_window_hop(self._trigger_window)
+            self._ctx.set_batch_start(batch_start)
+            self._ctx.set_batch_end(batch_end)
+            self._ctx.set_window_hop(self._trigger_window)
 
         if isinstance(self.declaration, OutputDeclaration):
-            # Output: query, write to sink, propagate expiration
-            result = self.engine.query(self.declaration.sql)
+            result = await asyncio.to_thread(self._ctx.query, self.declaration.sql)
             await self._emit_by_window(result)
             await self.propagate_expiration()
         elif isinstance(self.declaration, ViewDeclaration):
-            # View: query, send transformed result downstream
-            result = self.engine.query(self.declaration.sql)
+            result = await asyncio.to_thread(self._ctx.query, self.declaration.sql)
             await self._send_downstream(result)
 
     async def _send_downstream(self, batch: pa.RecordBatch) -> None:
@@ -363,7 +363,7 @@ class Task:
         if self.config.node_type == "source":
             if isinstance(self.declaration, SourceDeclaration) and self.declaration.ts_col:
                 logger.debug("%s: DELETE data before %s", self.config.task_id, _fmt_wm(threshold))
-                self.engine.delete_before(self.config.node_name, self.declaration.ts_col, threshold)
+                self._ctx.delete_before(self.config.node_name, self.declaration.ts_col, threshold)
         else:
             final_threshold = threshold
             if self.effective_watermark is not None:

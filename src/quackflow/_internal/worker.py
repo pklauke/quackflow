@@ -1,5 +1,6 @@
 """Worker - physical execution unit that runs multiple tasks."""
 
+import asyncio
 import datetime as dt
 from typing import TYPE_CHECKING
 
@@ -92,9 +93,10 @@ class SingleWorkerOrchestrator:
             for task in self.tasks.values():
                 task.initialize(start)
 
-            for task in self.tasks.values():
-                if task.config.node_type == "source":
-                    await task.run_source(start, end)
+            source_tasks = [
+                task.run_source(start, end) for task in self.tasks.values() if task.config.node_type == "source"
+            ]
+            await asyncio.gather(*source_tasks)
 
             for task in self.tasks.values():
                 await task.final_fire()
