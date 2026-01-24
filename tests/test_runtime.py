@@ -377,8 +377,8 @@ class TestDataExpiration:
             end=dt.datetime(2024, 1, 1, 10, 10, tzinfo=dt.timezone.utc),
         )
 
-        events_count = runtime._engine.query("SELECT COUNT(*) as cnt FROM events").to_pydict()["cnt"][0]
-        meta_count = runtime._engine.query("SELECT COUNT(*) as cnt FROM metadata").to_pydict()["cnt"][0]
+        events_count = runtime._engine.create_context().query("SELECT COUNT(*) as cnt FROM events").to_pydict()["cnt"][0]
+        meta_count = runtime._engine.create_context().query("SELECT COUNT(*) as cnt FROM metadata").to_pydict()["cnt"][0]
         assert events_count == 1, f"events should have 1 row, got {events_count}"
         assert meta_count == 1, f"metadata should have 1 row, got {meta_count}"
 
@@ -415,7 +415,7 @@ class TestDataExpiration:
             end=dt.datetime(2024, 1, 1, 10, 10, tzinfo=dt.timezone.utc),
         )
 
-        final_count = runtime._engine.query("SELECT COUNT(*) as cnt FROM events").to_pydict()["cnt"][0]
+        final_count = runtime._engine.create_context().query("SELECT COUNT(*) as cnt FROM events").to_pydict()["cnt"][0]
         assert final_count == 1
 
     @pytest.mark.asyncio
@@ -457,7 +457,7 @@ class TestDataExpiration:
             end=dt.datetime(2024, 1, 1, 10, 15, tzinfo=dt.timezone.utc),
         )
 
-        final_count = runtime._engine.query("SELECT COUNT(*) as cnt FROM events").to_pydict()["cnt"][0]
+        final_count = runtime._engine.create_context().query("SELECT COUNT(*) as cnt FROM events").to_pydict()["cnt"][0]
         assert final_count >= 2
 
     @pytest.mark.asyncio
@@ -493,7 +493,7 @@ class TestDataExpiration:
             end=dt.datetime(2024, 1, 1, 10, 15, tzinfo=dt.timezone.utc),
         )
 
-        final_count = runtime._engine.query("SELECT COUNT(*) as cnt FROM events").to_pydict()["cnt"][0]
+        final_count = runtime._engine.create_context().query("SELECT COUNT(*) as cnt FROM events").to_pydict()["cnt"][0]
         assert final_count >= 2
 
 

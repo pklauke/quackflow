@@ -18,14 +18,16 @@ class TestEngineTableCreation:
 
         engine.create_table("events", EventSchema)
 
-        tables = engine.query("SELECT table_name FROM information_schema.tables WHERE table_name = 'events'")
+        ctx = engine.create_context()
+        tables = ctx.query("SELECT table_name FROM information_schema.tables WHERE table_name = 'events'")
         assert tables.num_rows == 1
 
     def test_create_table_is_empty(self):
         engine = Engine()
         engine.create_table("events", EventSchema)
 
-        result = engine.query("SELECT COUNT(*) as cnt FROM events")
+        ctx = engine.create_context()
+        result = ctx.query("SELECT COUNT(*) as cnt FROM events")
 
         assert result.column("cnt")[0].as_py() == 0
 
@@ -34,6 +36,7 @@ class TestEngineInsert:
     def test_insert_record_batch(self):
         engine = Engine()
         engine.create_table("events", EventSchema)
+        ctx = engine.create_context()
         batch = pa.RecordBatch.from_pydict(
             {
                 "id": [1, 2],
@@ -45,14 +48,15 @@ class TestEngineInsert:
             }
         )
 
-        engine.insert("events", batch)
+        ctx.insert("events", batch)
 
-        result = engine.query("SELECT COUNT(*) as cnt FROM events")
+        result = ctx.query("SELECT COUNT(*) as cnt FROM events")
         assert result.column("cnt")[0].as_py() == 2
 
     def test_insert_multiple_batches(self):
         engine = Engine()
         engine.create_table("events", EventSchema)
+        ctx = engine.create_context()
         batch1 = pa.RecordBatch.from_pydict(
             {
                 "id": [1],
@@ -68,10 +72,10 @@ class TestEngineInsert:
             }
         )
 
-        engine.insert("events", batch1)
-        engine.insert("events", batch2)
+        ctx.insert("events", batch1)
+        ctx.insert("events", batch2)
 
-        result = engine.query("SELECT COUNT(*) as cnt FROM events")
+        result = ctx.query("SELECT COUNT(*) as cnt FROM events")
         assert result.column("cnt")[0].as_py() == 2
 
 
@@ -79,6 +83,7 @@ class TestEngineQuery:
     def test_query_returns_record_batch(self):
         engine = Engine()
         engine.create_table("events", EventSchema)
+        ctx = engine.create_context()
         batch = pa.RecordBatch.from_pydict(
             {
                 "id": [1, 2, 3],
@@ -90,9 +95,9 @@ class TestEngineQuery:
                 ],
             }
         )
-        engine.insert("events", batch)
+        ctx.insert("events", batch)
 
-        result = engine.query("SELECT * FROM events WHERE user_id = 'alice'")
+        result = ctx.query("SELECT * FROM events WHERE user_id = 'alice'")
 
         assert isinstance(result, pa.RecordBatch)
         assert result.num_rows == 2
@@ -100,6 +105,7 @@ class TestEngineQuery:
     def test_query_with_aggregation(self):
         engine = Engine()
         engine.create_table("events", EventSchema)
+        ctx = engine.create_context()
         batch = pa.RecordBatch.from_pydict(
             {
                 "id": [1, 2, 3],
@@ -111,9 +117,9 @@ class TestEngineQuery:
                 ],
             }
         )
-        engine.insert("events", batch)
+        ctx.insert("events", batch)
 
-        result = engine.query("SELECT user_id, COUNT(*) as cnt FROM events GROUP BY user_id ORDER BY user_id")
+        result = ctx.query("SELECT user_id, COUNT(*) as cnt FROM events GROUP BY user_id ORDER BY user_id")
 
         assert result.num_rows == 2
         assert result.column("user_id").to_pylist() == ["alice", "bob"]
