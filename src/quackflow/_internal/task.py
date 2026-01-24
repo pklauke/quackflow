@@ -133,36 +133,7 @@ class Task:
                     await asyncio.to_thread(self._ctx.insert, self.config.node_name, batch)
                     watermark = source.watermark
                     if watermark is not None:
-                        # Check if any handle needs repartitioning
-                        own_key = (
-                            self.declaration.partition_by if isinstance(self.declaration, SourceDeclaration) else None
-                        )
-                        repartition_key = None
-                        for handle in self.downstream_handles:
-                            target_key = handle.target_repartition_key
-                            if target_key and (own_key is None or set(target_key) != set(own_key)):
-                                repartition_key = target_key
-                                break
-
-                        if repartition_key:
-                            partitioned = repartition(batch, repartition_key, self._num_partitions)
-                            for handle in self.downstream_handles:
-                                partition_batch = partitioned.get(handle.target_partition_id)
-                                if partition_batch is not None:
-                                    message = WatermarkMessage(
-                                        watermark=watermark,
-                                        num_rows=partition_batch.num_rows,
-                                        batch=partition_batch if self._propagate_batch else None,
-                                    )
-                                    await handle.send(message)
-                        else:
-                            message = WatermarkMessage(
-                                watermark=watermark,
-                                num_rows=batch.num_rows,
-                                batch=batch if self._propagate_batch else None,
-                            )
-                            for handle in self.downstream_handles:
-                                await handle.send(message)
+                        await self._send_batch_to_handles(batch, watermark)
 
                 if batch.num_rows == 0:
                     await asyncio.sleep(0.01)
@@ -257,8 +228,11 @@ class Task:
         if watermark is None:
             return
 
-        # Check if repartitioning is needed
-        own_key = self.declaration.partition_by if isinstance(self.declaration, ViewDeclaration) else None
+        await self._send_batch_to_handles(batch, watermark)
+
+    async def _send_batch_to_handles(self, batch: pa.RecordBatch, watermark: dt.datetime) -> None:
+        """Send batch to downstream handles, repartitioning if needed."""
+        own_key = self.declaration.partition_by
         repartition_key = None
         for handle in self.downstream_handles:
             target_key = handle.target_repartition_key

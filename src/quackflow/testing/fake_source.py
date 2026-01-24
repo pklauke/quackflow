@@ -18,15 +18,13 @@ class FakeSource:
         self._delay = delay_between_batches
         self._index = 0
         self._watermark: dt.datetime | None = None
-        self._started = False
-        self._stopped = False
 
     @property
     def watermark(self) -> dt.datetime | None:
         return self._watermark
 
     async def start(self) -> None:
-        self._started = True
+        pass
 
     async def seek(self, timestamp: dt.datetime) -> None:
         pass
@@ -46,4 +44,4 @@ class FakeSource:
         return batch
 
     async def stop(self) -> None:
-        self._stopped = True
+        pass

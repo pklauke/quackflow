@@ -98,7 +98,7 @@ class KafkaSource:
                         data["__key"] = None
                 messages.append(data)
             except Exception:
-                logger.warning("Failed to deserialize message, skipping")
+                logger.warning("Failed to deserialize message, skipping", exc_info=True)
                 continue
 
         if not messages:
