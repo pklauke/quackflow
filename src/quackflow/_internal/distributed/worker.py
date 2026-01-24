@@ -112,7 +112,8 @@ class DistributedWorkerOrchestrator:
         else:
             # Different worker - Arrow Flight
             worker = self.cluster_config.get_worker_for_task(target_id)
-            assert worker is not None, f"No worker found for task {target_id}"
+            if worker is None:
+                raise ValueError(f"No worker found for task {target_id}")
             target_config = self.cluster_config.exec_dag.get_task(target_id)
             return RemoteDownstreamHandle(
                 sender_id=sender_id,
@@ -129,7 +130,8 @@ class DistributedWorkerOrchestrator:
             return LocalUpstreamHandle(sender_id, self.tasks[target_id])
         else:
             worker = self.cluster_config.get_worker_for_task(target_id)
-            assert worker is not None, f"No worker found for task {target_id}"
+            if worker is None:
+                raise ValueError(f"No worker found for task {target_id}")
             return RemoteUpstreamHandle(
                 sender_id=sender_id,
                 target_task_id=target_id,
