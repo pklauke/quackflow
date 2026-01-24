@@ -76,7 +76,7 @@ class QuackflowFlightServer(flight.FlightServerBase):
                 task.receive_watermark(sender_id, message),
                 self._loop,
             )
-            future.result()  # Wait for completion
+            future.result(timeout=5)
 
         elif msg_type == MSG_TYPE_EXPIRATION:
             threshold = dt.datetime.fromtimestamp(
@@ -98,4 +98,4 @@ class QuackflowFlightServer(flight.FlightServerBase):
                 task.receive_expiration(sender_id, message),
                 self._loop,
             )
-            future.result()
+            future.result(timeout=5)
