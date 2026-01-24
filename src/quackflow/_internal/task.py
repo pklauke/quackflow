@@ -44,48 +44,35 @@ class Task:
         config: TaskConfig,
         declaration: SourceDeclaration | ViewDeclaration | OutputDeclaration,
         engine: "Engine",
+        *,
+        source: "Source | None" = None,
+        sink: "Sink | None" = None,
+        max_window_size: dt.timedelta = dt.timedelta(0),
+        num_partitions: int = 1,
+        propagate_batch: bool = False,
     ):
         self.config = config
         self.declaration = declaration
-        self.engine = engine
+        self._ctx = engine.create_context()
         self._state = TaskState()
 
         self.downstream_handles: list[DownstreamHandle] = []
         self.upstream_handles: list[UpstreamHandle] = []
 
-        self._source: "Source | None" = None
-        self._sink: "Sink | None" = None
-        self._max_window_size: dt.timedelta = dt.timedelta(0)
+        self._source = source
+        self._sink = sink
+        self._max_window_size = max_window_size
+        self._num_partitions = num_partitions
+        self._propagate_batch = propagate_batch
         self._downstream_thresholds: dict[str, dt.datetime] = {}
 
-        # Distributed mode settings
-        self._num_partitions: int = 1
-        self._propagate_batch: bool = False  # Whether to include batch in messages
-
-        # Trigger settings (from declaration or inferred)
-        self._trigger_window: dt.timedelta | None = None
-        self._trigger_records: int | None = None
-
-        self._ctx = engine.create_context()
-
-    def set_source(self, source: "Source") -> None:
-        self._source = source
-
-    def set_sink(self, sink: "Sink") -> None:
-        self._sink = sink
-
-    def set_max_window_size(self, size: dt.timedelta) -> None:
-        self._max_window_size = size
-
-    def set_num_partitions(self, num_partitions: int) -> None:
-        self._num_partitions = num_partitions
-
-    def set_propagate_batch(self, enabled: bool) -> None:
-        self._propagate_batch = enabled
-
-    def set_trigger(self, window: dt.timedelta | None, records: int | None) -> None:
-        self._trigger_window = window
-        self._trigger_records = records
+        # Extract trigger from declaration
+        if declaration._trigger is not None:
+            self._trigger_window = declaration._trigger.window
+            self._trigger_records = declaration._trigger.records
+        else:
+            self._trigger_window = None
+            self._trigger_records = None
 
     @property
     def effective_watermark(self) -> dt.datetime | None:
@@ -232,7 +219,7 @@ class Task:
 
     async def _send_batch_to_handles(self, batch: pa.RecordBatch, watermark: dt.datetime) -> None:
         """Send batch to downstream handles, repartitioning if needed."""
-        own_key = self.declaration.partition_by
+        own_key = getattr(self.declaration, "partition_by", None)
         repartition_key = None
         for handle in self.downstream_handles:
             target_key = handle.target_repartition_key

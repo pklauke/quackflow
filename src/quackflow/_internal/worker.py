@@ -4,10 +4,11 @@ import asyncio
 import datetime as dt
 from typing import TYPE_CHECKING
 
-from quackflow.app import DAG, OutputDeclaration, SourceDeclaration, ViewDeclaration
+from quackflow.app import DAG, SourceDeclaration, ViewDeclaration
 from quackflow._internal.execution import ExecutionDAG
 from quackflow._internal.task import Task
 from quackflow._internal.transport import LocalDownstreamHandle, LocalUpstreamHandle
+from quackflow._internal.worker_utils import compute_max_window_size, create_task
 
 if TYPE_CHECKING:
     from quackflow._internal.engine import Engine
@@ -34,31 +35,23 @@ class SingleWorkerOrchestrator:
     def setup(self) -> None:
         for node in self.user_dag.nodes:
             if node.node_type == "source":
-                decl: SourceDeclaration = node.declaration  # type: ignore
+                decl: SourceDeclaration = node.declaration  # type: ignore[assignment]
                 self.engine.create_table(node.name, decl.schema)
             elif node.node_type == "view":
-                decl: ViewDeclaration = node.declaration  # type: ignore
+                decl: ViewDeclaration = node.declaration  # type: ignore[assignment]
                 self.engine.create_view(node.name, decl.sql)
 
-        max_window_size = self._compute_max_window_size()
+        max_window_size = compute_max_window_size(self.user_dag)
 
         for task_config in self.exec_dag.tasks.values():
-            node = self.user_dag.get_node(task_config.node_name)
-            task = Task(task_config, node.declaration, self.engine)
-
-            # Set trigger from declaration
-            if node.declaration._trigger is not None:
-                task.set_trigger(node.declaration._trigger.window, node.declaration._trigger.records)
-
-            if isinstance(node.declaration, OutputDeclaration):
-                if task_config.node_name in self.sinks:
-                    task.set_sink(self.sinks[task_config.node_name])
-                task.set_max_window_size(max_window_size)
-
-            if isinstance(node.declaration, SourceDeclaration):
-                if task_config.node_name in self.sources:
-                    task.set_source(self.sources[task_config.node_name])
-
+            task = create_task(
+                task_config,
+                self.user_dag,
+                self.engine,
+                self.sources,
+                self.sinks,
+                max_window_size,
+            )
             self.tasks[task_config.task_id] = task
 
         for task_config in self.exec_dag.tasks.values():
@@ -69,19 +62,6 @@ class SingleWorkerOrchestrator:
             for upstream_id in task_config.upstream_tasks:
                 upstream_task = self.tasks[upstream_id]
                 task.upstream_handles.append(LocalUpstreamHandle(task.config.task_id, upstream_task))
-
-    def _compute_max_window_size(self) -> dt.timedelta:
-        all_window_sizes: list[dt.timedelta] = []
-        for node in self.user_dag.nodes:
-            if node.node_type == "view":
-                decl: ViewDeclaration = node.declaration  # type: ignore
-                all_window_sizes.extend(decl.window_sizes)
-            elif node.node_type == "output":
-                decl: OutputDeclaration = node.declaration  # type: ignore
-                all_window_sizes.extend(decl.window_sizes)
-                if decl._trigger is not None and decl._trigger.window is not None:
-                    all_window_sizes.append(decl._trigger.window)
-        return max(all_window_sizes, default=dt.timedelta(0))
 
     async def run(self, start: dt.datetime, end: dt.datetime | None) -> None:
         self.setup()

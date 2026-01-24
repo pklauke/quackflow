@@ -7,7 +7,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow.flight as flight
 
-from quackflow.app import OutputDeclaration, SourceDeclaration, ViewDeclaration
+from quackflow.app import SourceDeclaration, ViewDeclaration
 from quackflow._internal.distributed.config import ClusterConfig, WorkerInfo
 from quackflow._internal.distributed.flight_client import FlightClientPool
 from quackflow._internal.distributed.flight_server import QuackflowFlightServer
@@ -19,6 +19,7 @@ from quackflow._internal.transport import (
     RemoteDownstreamHandle,
     RemoteUpstreamHandle,
 )
+from quackflow._internal.worker_utils import compute_max_window_size, create_task
 
 if TYPE_CHECKING:
     from quackflow.sink import Sink
@@ -65,30 +66,22 @@ class DistributedWorkerOrchestrator:
         """Initialize tables, views, tasks, and wiring."""
         user_dag = self.cluster_config.user_dag
         exec_dag = self.cluster_config.exec_dag
-        max_window_size = self._compute_max_window_size()
+        max_window_size = compute_max_window_size(user_dag)
 
         # Create only tasks assigned to this worker, each with its own engine
         for task_id in self.worker_info.task_ids:
             task_config = exec_dag.get_task(task_id)
-            node = user_dag.get_node(task_config.node_name)
             engine = self._create_engine_for_task(task_config)
-            task = Task(task_config, node.declaration, engine)
-            task.set_num_partitions(exec_dag.num_partitions)
-            task.set_propagate_batch(True)
-
-            # Set trigger from declaration
-            if node.declaration._trigger is not None:
-                task.set_trigger(node.declaration._trigger.window, node.declaration._trigger.records)
-
-            if isinstance(node.declaration, OutputDeclaration):
-                if task_config.node_name in self.sinks:
-                    task.set_sink(self.sinks[task_config.node_name])
-                task.set_max_window_size(max_window_size)
-
-            if isinstance(node.declaration, SourceDeclaration):
-                if task_config.node_name in self.sources:
-                    task.set_source(self.sources[task_config.node_name])
-
+            task = create_task(
+                task_config,
+                user_dag,
+                engine,
+                self.sources,
+                self.sinks,
+                max_window_size,
+                num_partitions=exec_dag.num_partitions,
+                propagate_batch=True,
+            )
             self.tasks[task_id] = task
 
         # Wire up handles - local or remote based on task location
@@ -140,19 +133,6 @@ class DistributedWorkerOrchestrator:
                 client_pool=self.client_pool,
             )
 
-    def _compute_max_window_size(self) -> dt.timedelta:
-        all_window_sizes: list[dt.timedelta] = []
-        for node in self.cluster_config.user_dag.nodes:
-            if node.node_type == "view":
-                decl: ViewDeclaration = node.declaration  # type: ignore
-                all_window_sizes.extend(decl.window_sizes)
-            elif node.node_type == "output":
-                decl: OutputDeclaration = node.declaration  # type: ignore
-                all_window_sizes.extend(decl.window_sizes)
-                if decl._trigger is not None and decl._trigger.window is not None:
-                    all_window_sizes.append(decl._trigger.window)
-        return max(all_window_sizes, default=dt.timedelta(0))
-
     async def run(self, start: dt.datetime, end: dt.datetime | None) -> None:
         """Run the worker."""
         self._loop = asyncio.get_event_loop()
@@ -176,10 +156,10 @@ class DistributedWorkerOrchestrator:
         for task in self.tasks.values():
             task.initialize(start)
 
-        # Run source tasks
-        for task in self.tasks.values():
-            if task.config.node_type == "source":
-                await task.run_source(start, end)
+        source_tasks = [
+            task.run_source(start, end) for task in self.tasks.values() if task.config.node_type == "source"
+        ]
+        await asyncio.gather(*source_tasks)
 
         # Final fire for output tasks
         for task in self.tasks.values():
