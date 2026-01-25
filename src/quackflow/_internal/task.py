@@ -151,8 +151,13 @@ class Task:
 
         if new_effective is not None and (old_effective is None or new_effective > old_effective):
             if isinstance(self.declaration, ViewDeclaration) and not self._propagate_batch:
-                # Single-worker mode: views forward watermarks directly (engine has actual DuckDB view)
-                await self._forward_watermark(message)
+                # Single-worker mode: views forward effective watermark (min of all upstreams)
+                effective_message = WatermarkMessage(
+                    watermark=new_effective,
+                    num_rows=message.num_rows,
+                    batch=message.batch,
+                )
+                await self._forward_watermark(effective_message)
             elif self._should_fire():
                 # Distributed mode or output: check trigger and fire
                 await self._fire()

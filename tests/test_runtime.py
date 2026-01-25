@@ -501,6 +501,115 @@ class TestDataExpiration:
         assert final_count >= 2
 
 
+class TestWatermarkPropagation:
+    @pytest.mark.asyncio
+    async def test_view_forwards_effective_watermark_not_individual(self):
+        """View with multiple upstreams forwards min(watermarks), not individual watermarks.
+
+        This is a unit test for the Task class that directly verifies the watermark
+        forwarding behavior by capturing what watermarks are sent to downstream handles.
+
+        The bug: if a view forwards individual upstream watermarks instead of the effective
+        (minimum) watermark, downstream could receive non-monotonic watermarks.
+        """
+        from quackflow._internal.engine import Engine
+        from quackflow._internal.execution import TaskConfig
+        from quackflow._internal.task import Task
+        from quackflow._internal.transport import WatermarkMessage
+        from quackflow.app import ViewDeclaration
+
+        # Create a mock downstream handle that captures sent watermarks
+        class MockDownstreamHandle:
+            def __init__(self):
+                self.sent_watermarks: list[dt.datetime] = []
+
+            @property
+            def task_id(self) -> str:
+                return "downstream[0]"
+
+            @property
+            def target_partition_id(self) -> int:
+                return 0
+
+            @property
+            def target_repartition_key(self) -> list[str] | None:
+                return None
+
+            async def send(self, message: WatermarkMessage) -> None:
+                self.sent_watermarks.append(message.watermark)
+
+        # Create a mock upstream handle
+        class MockUpstreamHandle:
+            def __init__(self, task_id: str):
+                self._task_id = task_id
+
+            @property
+            def task_id(self) -> str:
+                return self._task_id
+
+        # Set up the view task
+        engine = Engine()
+        config = TaskConfig(
+            task_id="combined[0]",
+            node_name="combined",
+            node_type="view",
+            partition_id=0,
+            upstream_tasks=["source_a[0]", "source_b[0]"],
+            downstream_tasks=["output[0]"],
+            repartition_key=None,
+        )
+        declaration = ViewDeclaration(
+            name="combined",
+            sql="SELECT 1",  # Doesn't matter for this test
+            depends_on=["source_a", "source_b"],
+            window_sizes=[],
+            partition_by=None,
+        )
+
+        task = Task(config, declaration, engine)
+        downstream_handle = MockDownstreamHandle()
+        task.downstream_handles = [downstream_handle]
+        task.upstream_handles = [
+            MockUpstreamHandle("source_a[0]"),
+            MockUpstreamHandle("source_b[0]"),
+        ]
+
+        # Simulate receiving watermarks from two upstreams in sequence
+        # Source B sends watermark 10:05 first (slower source)
+        await task.receive_watermark(
+            "source_b[0]",
+            WatermarkMessage(
+                watermark=dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc),
+                num_rows=1,
+                batch=None,
+            ),
+        )
+        # At this point, effective watermark is None (waiting for source_a)
+        # So no watermark should be forwarded yet
+        assert len(downstream_handle.sent_watermarks) == 0, (
+            "Should not forward watermark until all upstreams have sent"
+        )
+
+        # Source A sends watermark 10:15 (faster source, arrives second)
+        await task.receive_watermark(
+            "source_a[0]",
+            WatermarkMessage(
+                watermark=dt.datetime(2024, 1, 1, 10, 15, tzinfo=dt.timezone.utc),
+                num_rows=1,
+                batch=None,
+            ),
+        )
+        # Now effective watermark is min(10:05, 10:15) = 10:05
+        # The view should forward 10:05, NOT 10:15 (the message that triggered the forward)
+        assert len(downstream_handle.sent_watermarks) == 1, (
+            "Should forward watermark once both upstreams have sent"
+        )
+        assert downstream_handle.sent_watermarks[0] == dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc), (
+            f"Should forward effective watermark 10:05, not the triggering message's watermark 10:15. "
+            f"Got: {downstream_handle.sent_watermarks[0]}"
+        )
+
+
 class TestMultiplePartitions:
     @pytest.mark.asyncio
     async def test_two_partitions_same_result_as_one(self):
