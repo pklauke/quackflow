@@ -89,33 +89,16 @@ class ObservableSink:
             await self._kafka_sink.stop()
 
     def _print_results(self, batch: pa.RecordBatch) -> None:
-        rows = batch.to_pylist()
-        if not rows:
-            return
-
-        window_end = rows[0]["window_end"]
-        window_start = rows[0]["window_start"]
-
-        print(f"\n{'=' * 60}")
-        print(f"Window: {window_start.strftime('%H:%M')} - {window_end.strftime('%H:%M')}")
-        print(f"{'=' * 60}")
-        print(f"{'Region':<12} {'Revenue':>12} {'Orders':>8} {'Avg Delivery':>14}")
-        print(f"{'-' * 12} {'-' * 12} {'-' * 8} {'-' * 14}")
-
-        total_revenue = 0.0
-        total_orders = 0
-        for row in rows:
+        for row in batch.to_pylist():
+            window = f"{row['window_start'].strftime('%H:%M')}-{row['window_end'].strftime('%H:%M')}"
             avg_del = row["avg_delivery_minutes"]
             avg_del_str = f"{avg_del:.1f}min" if avg_del is not None else "N/A"
             print(
-                f"{row['region']:<12} ${row['total_revenue']:>11,.2f} "
-                f"{row['num_orders']:>8,} {avg_del_str:>14}"
+                f"[{window}] {row['region']}: "
+                f"${row['total_revenue']:,.2f} revenue, "
+                f"{row['num_orders']} orders, "
+                f"{avg_del_str} avg delivery"
             )
-            total_revenue += row["total_revenue"]
-            total_orders += row["num_orders"]
-
-        print(f"{'-' * 12} {'-' * 12} {'-' * 8} {'-' * 14}")
-        print(f"{'TOTAL':<12} ${total_revenue:>11,.2f} {total_orders:>8,}")
 
 
 class ProgressReporter:

@@ -232,7 +232,7 @@ def parse_args() -> argparse.Namespace:
         default=dt.datetime.now(dt.timezone.utc),
         help="End of data range, ISO format (default: now)",
     )
-    parser.add_argument("--orders-per-hour", type=int, default=5000, help="Average orders per hour")
+    parser.add_argument("--orders-per-hour", type=int, default=20000, help="Average orders per hour")
     parser.add_argument("--delivery-rate", type=float, default=0.85, help="Fraction of orders with delivery")
     parser.add_argument("--delivery-lag-minutes", type=int, default=30, help="Average delivery lag in minutes")
     parser.add_argument("--continuous", action="store_true", help="Continue producing in real-time after backfill")
