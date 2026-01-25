@@ -30,7 +30,7 @@ logger = logging.getLogger(__name__)
 class TaskState:
     upstream_watermarks: dict[str, dt.datetime] = field(default_factory=dict)
     upstream_records: dict[str, int] = field(default_factory=dict)
-    last_fired_window: dt.datetime | None = None
+    last_fired_watermark: dt.datetime | None = None
     records_at_last_fire: int = 0
 
 
@@ -64,7 +64,7 @@ class Task:
         self._max_window_size = max_window_size
         self._num_partitions = num_partitions
         self._propagate_batch = propagate_batch
-        self._downstream_thresholds: dict[str, dt.datetime] = {}
+        self._downstream_expirations: dict[str, ExpirationMessage] = {}
 
         # Extract trigger from declaration
         if declaration._trigger is not None:
@@ -86,17 +86,9 @@ class Task:
     def total_records(self) -> int:
         return sum(self._state.upstream_records.values())
 
-    @property
-    def expiration_threshold(self) -> dt.datetime | None:
-        if not self._downstream_thresholds:
-            return None
-        if len(self._downstream_thresholds) < len(self.downstream_handles):
-            return None
-        return min(self._downstream_thresholds.values())
-
     def initialize(self, start: dt.datetime) -> None:
         if self._trigger_window is not None:
-            self._state.last_fired_window = self._snap_to_window(start)
+            self._state.last_fired_watermark = self._snap_to_window(start)
 
     async def run_source(self, start: dt.datetime, end: dt.datetime | None) -> None:
         from quackflow.source import ReplayableSource
@@ -163,13 +155,33 @@ class Task:
                 await self._fire()
 
     async def receive_expiration(self, downstream_id: str, message: ExpirationMessage) -> None:
-        logger.debug("%s <- %s: EXPIRATION %s", self.config.task_id, downstream_id, _fmt_wm(message.threshold))
-        old_threshold = self.expiration_threshold
-        self._downstream_thresholds[downstream_id] = message.threshold
-        new_threshold = self.expiration_threshold
+        logger.debug(
+            "%s <- %s: EXPIRATION processed_until=%s threshold=%s",
+            self.config.task_id,
+            downstream_id,
+            _fmt_wm(message.processed_until),
+            _fmt_wm(message.threshold),
+        )
 
-        if new_threshold is not None and (old_threshold is None or new_threshold > old_threshold):
-            await self._handle_expiration(new_threshold)
+        old_message = self._downstream_expirations.get(downstream_id)
+        self._downstream_expirations[downstream_id] = message
+
+        # Only process when we have messages from ALL downstreams
+        if len(self._downstream_expirations) < len(self.downstream_handles):
+            return
+
+        # Compute minimum threshold across all downstreams
+        min_threshold = min(m.threshold for m in self._downstream_expirations.values())
+        # Use max processed_until as reference point for upstream propagation
+        max_processed_until = max(m.processed_until for m in self._downstream_expirations.values())
+
+        # Only process if threshold has advanced
+        if old_message is None or message.threshold > old_message.threshold:
+            combined_message = ExpirationMessage(
+                processed_until=max_processed_until,
+                threshold=min_threshold,
+            )
+            await self._handle_expiration(combined_message)
 
     def _should_fire(self) -> bool:
         # Check records trigger
@@ -180,9 +192,9 @@ class Task:
         # Check window trigger
         if self._trigger_window is not None:
             watermark = self.effective_watermark
-            if watermark is not None and self._state.last_fired_window is not None:
+            if watermark is not None and self._state.last_fired_watermark is not None:
                 current_window = self._snap_to_window(watermark)
-                if current_window > self._state.last_fired_window:
+                if current_window > self._state.last_fired_watermark:
                     return True
 
         return False
@@ -195,10 +207,10 @@ class Task:
         if self._trigger_window is not None and self.effective_watermark is not None:
             target = self._snap_to_window(self.effective_watermark)
 
-        if self._trigger_window is not None and self._state.last_fired_window is not None:
-            batch_start = self._state.last_fired_window - self._max_window_size + self._trigger_window
-            batch_end = target if target is not None else self._state.last_fired_window + self._trigger_window
-            self._state.last_fired_window = batch_end
+        if self._trigger_window is not None and self._state.last_fired_watermark is not None:
+            batch_start = self._state.last_fired_watermark - self._max_window_size + self._trigger_window
+            batch_end = target if target is not None else self._state.last_fired_watermark + self._trigger_window
+            self._state.last_fired_watermark = batch_end
             self._ctx.set_batch_start(batch_start)
             self._ctx.set_batch_end(batch_end)
             self._ctx.set_window_hop(self._trigger_window)
@@ -264,12 +276,17 @@ class Task:
     async def propagate_expiration(self) -> None:
         if not isinstance(self.declaration, OutputDeclaration):
             return
-        if self._state.last_fired_window is None:
+        if self._state.last_fired_watermark is None:
             return
 
+        # Compute initial threshold from output's window sizes
         max_window = max(self.declaration.window_sizes, default=dt.timedelta(0))
-        threshold = self._state.last_fired_window - max_window
-        message = ExpirationMessage(threshold=threshold)
+        threshold = self._state.last_fired_watermark - max_window
+
+        message = ExpirationMessage(
+            processed_until=self._state.last_fired_watermark,
+            threshold=threshold,
+        )
 
         for handle in self.upstream_handles:
             await handle.send(message)
@@ -325,19 +342,22 @@ class Task:
         snapped_seconds = int(seconds_since_midnight // window_seconds) * window_seconds
         return midnight + dt.timedelta(seconds=snapped_seconds)
 
-    async def _handle_expiration(self, threshold: dt.datetime) -> None:
+    async def _handle_expiration(self, message: ExpirationMessage) -> None:
         if self.config.node_type == "source":
+            # Sources use the received threshold directly
             if isinstance(self.declaration, SourceDeclaration) and self.declaration.ts_col:
-                logger.debug("%s: DELETE data before %s", self.config.task_id, _fmt_wm(threshold))
-                self._ctx.delete_before(self.config.node_name, self.declaration.ts_col, threshold)
+                logger.debug("%s: DELETE data before %s", self.config.task_id, _fmt_wm(message.threshold))
+                self._ctx.delete_before(self.config.node_name, self.declaration.ts_col, message.threshold)
         else:
-            final_threshold = threshold
-            if self.effective_watermark is not None:
-                if isinstance(self.declaration, ViewDeclaration) and self.declaration.window_sizes:
-                    max_window = max(self.declaration.window_sizes)
-                    own_threshold = self.effective_watermark - max_window
-                    final_threshold = min(threshold, own_threshold)
+            # Compute this node's threshold from the reference point (avoids compounding)
+            window_sizes = getattr(self.declaration, "window_sizes", [])
+            max_window = max(window_sizes, default=dt.timedelta(0))
+            own_threshold = message.processed_until - max_window
 
-            message = ExpirationMessage(threshold=final_threshold)
+            # Forward minimum of received and own threshold
+            forward_message = ExpirationMessage(
+                processed_until=message.processed_until,
+                threshold=min(message.threshold, own_threshold),
+            )
             for handle in self.upstream_handles:
-                await handle.send(message)
+                await handle.send(forward_message)

@@ -23,9 +23,10 @@ class WatermarkMessage:
 
 @dataclass
 class ExpirationMessage:
-    """Message sent upstream with expiration threshold."""
+    """Message sent upstream indicating downstream's processing progress."""
 
-    threshold: dt.datetime
+    processed_until: dt.datetime  # Reference point: event time up to which downstream has processed
+    threshold: dt.datetime  # Minimum threshold: delete data before this time
 
 
 class DownstreamHandle(Protocol):
