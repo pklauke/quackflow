@@ -49,7 +49,7 @@ class TestSchemaDefinition:
         assert fields["c"].duckdb_type == "BIGINT"
         assert fields["d"].duckdb_type == "DOUBLE"
         assert fields["e"].duckdb_type == "BOOLEAN"
-        assert fields["f"].duckdb_type == "TIMESTAMP"
+        assert fields["f"].duckdb_type == "TIMESTAMPTZ"
 
 
 class TestDDLGeneration:

@@ -35,6 +35,8 @@ class TaskState:
 
 
 def _fmt_wm(watermark: dt.datetime) -> str:
+    if watermark.tzinfo is not None:
+        watermark = watermark.astimezone(dt.timezone.utc)
     return watermark.strftime("%H:%M:%S")
 
 
@@ -315,7 +317,7 @@ class Task:
                 logger.debug(
                     "%s: SINK WRITE window_end=%s (%d rows)",
                     self.config.task_id,
-                    current_end.as_py().strftime("%H:%M:%S"),
+                    _fmt_wm(current_end.as_py()),
                     batch.num_rows,
                 )
                 await self._sink.write(batch)
@@ -327,7 +329,7 @@ class Task:
             logger.debug(
                 "%s: SINK WRITE window_end=%s (%d rows)",
                 self.config.task_id,
-                current_end.as_py().strftime("%H:%M:%S"),
+                _fmt_wm(current_end.as_py()),
                 batch.num_rows,
             )
             await self._sink.write(batch)

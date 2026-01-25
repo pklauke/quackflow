@@ -24,15 +24,15 @@ class EngineContext:
         )
 
     def delete_before(self, table_name: str, ts_col: str, threshold: dt.datetime) -> int:
-        result = self._cursor.execute(f"DELETE FROM {table_name} WHERE {ts_col} < $1::TIMESTAMP", [threshold])
+        result = self._cursor.execute(f"DELETE FROM {table_name} WHERE {ts_col} < $1::TIMESTAMPTZ", [threshold])
         row = result.fetchone()
         return row[0] if row else 0
 
     def set_batch_start(self, batch_start: dt.datetime) -> None:
-        self._cursor.execute("SET VARIABLE __batch_start = $1::TIMESTAMP", [batch_start])
+        self._cursor.execute("SET VARIABLE __batch_start = $1::TIMESTAMPTZ", [batch_start])
 
     def set_batch_end(self, batch_end: dt.datetime) -> None:
-        self._cursor.execute("SET VARIABLE __batch_end = $1::TIMESTAMP", [batch_end])
+        self._cursor.execute("SET VARIABLE __batch_end = $1::TIMESTAMPTZ", [batch_end])
 
     def set_window_hop(self, hop: dt.timedelta) -> None:
         self._cursor.execute("SET VARIABLE __window_hop = $1::INTERVAL", [hop])
@@ -41,8 +41,8 @@ class EngineContext:
 class Engine:
     def __init__(self, database: str = ":memory:"):
         self._conn = duckdb.connect(database)
-        self._conn.execute("SET VARIABLE __batch_start = TIMESTAMP '1970-01-01 00:00:00'")
-        self._conn.execute("SET VARIABLE __batch_end = TIMESTAMP '1970-01-01 00:00:00'")
+        self._conn.execute("SET VARIABLE __batch_start = TIMESTAMPTZ '1970-01-01 00:00:00+00'")
+        self._conn.execute("SET VARIABLE __batch_end = TIMESTAMPTZ '1970-01-01 00:00:00+00'")
         self._conn.execute("SET VARIABLE __window_hop = INTERVAL '1 minute'")
         register_window_functions(self._conn)
 

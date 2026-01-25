@@ -93,7 +93,13 @@ class ObservableSink:
 
     def _print_results(self, batch: pa.RecordBatch) -> None:
         for row in batch.to_pylist():
-            window = f"{row['window_start'].strftime('%H:%M')}-{row['window_end'].strftime('%H:%M')}"
+            ws = row['window_start']
+            we = row['window_end']
+            if ws.tzinfo is not None:
+                ws = ws.astimezone(dt.timezone.utc)
+            if we.tzinfo is not None:
+                we = we.astimezone(dt.timezone.utc)
+            window = f"{ws.strftime('%H:%M')}-{we.strftime('%H:%M')}"
             avg_del = row["avg_delivery_minutes"]
             avg_del_str = f"{avg_del:.1f}min" if avg_del is not None else "N/A"
             print(

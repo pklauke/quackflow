@@ -9,8 +9,8 @@ def register_window_functions(conn: duckdb.DuckDBPyConnection) -> None:
                 ws AS window_start,
                 ws + size AS window_end
             FROM generate_series(
-                getvariable('__batch_start')::TIMESTAMP,
-                getvariable('__batch_end')::TIMESTAMP - size,
+                getvariable('__batch_start')::TIMESTAMPTZ,
+                getvariable('__batch_end')::TIMESTAMPTZ - size,
                 getvariable('__window_hop')::INTERVAL
             ) AS t(ws)
         )

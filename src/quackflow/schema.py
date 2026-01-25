@@ -70,7 +70,7 @@ class Bool(Field):
 
 
 class Timestamp(Field):
-    _duckdb_type = "TIMESTAMP"
+    _duckdb_type = "TIMESTAMPTZ"
     _avro_type: dict[str, typing.Any] = {"type": "long", "logicalType": "timestamp-micros"}
 
     def __init__(self, *, nullable: bool = False, default: datetime.datetime | _NoDefault = NO_DEFAULT):

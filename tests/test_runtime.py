@@ -586,9 +586,7 @@ class TestWatermarkPropagation:
         )
         # At this point, effective watermark is None (waiting for source_a)
         # So no watermark should be forwarded yet
-        assert len(downstream_handle.sent_watermarks) == 0, (
-            "Should not forward watermark until all upstreams have sent"
-        )
+        assert len(downstream_handle.sent_watermarks) == 0, "Should not forward watermark until all upstreams have sent"
 
         # Source A sends watermark 10:15 (faster source, arrives second)
         await task.receive_watermark(
@@ -601,9 +599,7 @@ class TestWatermarkPropagation:
         )
         # Now effective watermark is min(10:05, 10:15) = 10:05
         # The view should forward 10:05, NOT 10:15 (the message that triggered the forward)
-        assert len(downstream_handle.sent_watermarks) == 1, (
-            "Should forward watermark once both upstreams have sent"
-        )
+        assert len(downstream_handle.sent_watermarks) == 1, "Should forward watermark once both upstreams have sent"
         assert downstream_handle.sent_watermarks[0] == dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc), (
             f"Should forward effective watermark 10:05, not the triggering message's watermark 10:15. "
             f"Got: {downstream_handle.sent_watermarks[0]}"

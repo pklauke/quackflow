@@ -26,7 +26,7 @@ class RevenueSchema(Schema):
     window_end = Timestamp()
 
 
-BASE_DATE = dt.datetime(2024, 1, 15, 10, 0, 0)
+BASE_DATE = dt.datetime(2024, 1, 15, 10, 0, 0, tzinfo=dt.timezone.utc)
 
 
 def make_orders() -> list[dict]:
