@@ -37,7 +37,7 @@ class TaskState:
 def _fmt_wm(watermark: dt.datetime) -> str:
     if watermark.tzinfo is not None:
         watermark = watermark.astimezone(dt.timezone.utc)
-    return watermark.strftime("%H:%M:%S")
+    return watermark.isoformat()
 
 
 class Task:

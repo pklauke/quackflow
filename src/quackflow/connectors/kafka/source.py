@@ -129,8 +129,14 @@ class KafkaSource:
             return
 
         ts_ms = int(timestamp.timestamp() * 1000)
+        logger.debug("%s: seeking to %s (ts_ms=%d)", self._topic, timestamp.isoformat(), ts_ms)
         partitions = [TopicPartition(tp.topic, tp.partition, ts_ms) for tp in assignment]
         offsets = await asyncio.to_thread(self._consumer.offsets_for_times, partitions)
         for tp in offsets:
             if tp.offset >= 0:
+                logger.debug("%s: partition %d -> offset %d", self._topic, tp.partition, tp.offset)
                 await asyncio.to_thread(self._consumer.seek, tp)
+            else:
+                logger.warning(
+                    "%s: partition %d has no data at or after %s", self._topic, tp.partition, timestamp.isoformat()
+                )

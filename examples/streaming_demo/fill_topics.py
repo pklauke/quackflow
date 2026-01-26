@@ -108,10 +108,11 @@ def produce_backfill(
 
         messages.sort(key=lambda x: x[0])
 
-        for _, topic, data in messages:
+        for event_time, topic, data in messages:
+            ts_ms = int(event_time.timestamp() * 1000)
             while True:
                 try:
-                    producer.produce(topic, value=data)
+                    producer.produce(topic, value=data, timestamp=ts_ms)
                     producer.poll(0)
                     break
                 except BufferError:
@@ -167,7 +168,8 @@ async def produce_continuous(
         }
 
         order_bytes = order_serializer(order, orders_topic)
-        producer.produce(orders_topic, value=order_bytes)
+        order_ts_ms = int(now.timestamp() * 1000)
+        producer.produce(orders_topic, value=order_bytes, timestamp=order_ts_ms)
         producer.poll(0)
         total_orders += 1
 
@@ -176,9 +178,10 @@ async def produce_continuous(
             heapq.heappush(pending_deliveries, (delivery["delivery_time"], delivery))
 
         while pending_deliveries and pending_deliveries[0][0] <= now:
-            _, delivery = heapq.heappop(pending_deliveries)
+            delivery_time, delivery = heapq.heappop(pending_deliveries)
             delivery_bytes = delivery_serializer(delivery, deliveries_topic)
-            producer.produce(deliveries_topic, value=delivery_bytes)
+            delivery_ts_ms = int(delivery_time.timestamp() * 1000)
+            producer.produce(deliveries_topic, value=delivery_bytes, timestamp=delivery_ts_ms)
             producer.poll(0)
             total_deliveries += 1
 
