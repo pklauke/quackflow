@@ -100,7 +100,9 @@ class Task:
 
         await source.start()
         if isinstance(source, ReplayableSource):
-            await source.seek(start)
+            # Seek to start - max_window_size to have data for the first window
+            seek_timestamp = start - self._max_window_size
+            await source.seek(seek_timestamp)
 
         try:
             while True:

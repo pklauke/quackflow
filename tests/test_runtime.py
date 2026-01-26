@@ -606,6 +606,42 @@ class TestWatermarkPropagation:
         )
 
 
+class TestSeekBehavior:
+    @pytest.mark.asyncio
+    async def test_seek_accounts_for_window_size(self):
+        """When start=10:00 and window=15min, seek should be to 09:45 to have data for first window."""
+        time_notion = EventTimeNotion(column="event_time")
+        batch = make_batch(
+            [1, 2],
+            ["alice", "bob"],
+            [
+                dt.datetime(2024, 1, 1, 9, 50, tzinfo=dt.timezone.utc),
+                dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc),
+            ],
+        )
+        source = FakeSource([batch], time_notion)
+        sink = FakeSink()
+
+        app = Quackflow()
+        app.source("events", schema=EventSchema, ts_col="event_time")
+        app.output(
+            "results",
+            "SELECT COUNT(*) as cnt, window_end FROM HOP('events', 'event_time', INTERVAL '15 minutes') GROUP BY window_end",
+            schema=CountSchema,
+        ).trigger(window=dt.timedelta(minutes=15))
+
+        runtime = Runtime(app, sources={"events": source}, sinks={"results": sink})
+        await runtime.execute(
+            start=dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+            end=dt.datetime(2024, 1, 1, 10, 15, tzinfo=dt.timezone.utc),
+        )
+
+        # Seek should be to start - max_window_size = 10:00 - 15min = 09:45
+        assert source.seek_timestamp == dt.datetime(2024, 1, 1, 9, 45, tzinfo=dt.timezone.utc), (
+            f"Expected seek to 09:45, got {source.seek_timestamp}"
+        )
+
+
 class TestMultiplePartitions:
     @pytest.mark.asyncio
     async def test_two_partitions_same_result_as_one(self):

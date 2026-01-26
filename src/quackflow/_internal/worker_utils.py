@@ -45,7 +45,10 @@ def create_task(
 
     source = sources.get(task_config.node_name) if isinstance(declaration, SourceDeclaration) else None
     sink = sinks.get(task_config.node_name) if isinstance(declaration, OutputDeclaration) else None
-    task_max_window = max_window_size if isinstance(declaration, OutputDeclaration) else dt.timedelta(0)
+    # Sources need max_window_size for seek adjustment, outputs need it for batch window calculation
+    task_max_window = (
+        max_window_size if isinstance(declaration, (SourceDeclaration, OutputDeclaration)) else dt.timedelta(0)
+    )
 
     return Task(
         config=task_config,

@@ -18,6 +18,7 @@ class FakeSource:
         self._delay = delay_between_batches
         self._index = 0
         self._watermark: dt.datetime | None = None
+        self.seek_timestamp: dt.datetime | None = None
 
     @property
     def watermark(self) -> dt.datetime | None:
@@ -27,7 +28,7 @@ class FakeSource:
         pass
 
     async def seek(self, timestamp: dt.datetime) -> None:
-        pass
+        self.seek_timestamp = timestamp
 
     async def read(self) -> pa.RecordBatch:
         if self._index >= len(self._batches):
