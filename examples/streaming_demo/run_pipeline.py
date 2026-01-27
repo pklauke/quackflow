@@ -161,7 +161,13 @@ def parse_args() -> argparse.Namespace:
         "--start",
         type=lambda s: dt.datetime.fromisoformat(s).replace(tzinfo=dt.timezone.utc),
         default=None,
-        help="Start processing from this time (default: earliest)",
+        help="Start processing from this time (default: 24h ago)",
+    )
+    parser.add_argument(
+        "--end",
+        type=lambda s: dt.datetime.fromisoformat(s).replace(tzinfo=dt.timezone.utc),
+        default=None,
+        help="Stop processing at this time (default: run continuously)",
     )
     parser.add_argument("--window", default="15m", help="Window size, e.g., '15m', '1h'")
     parser.add_argument("--trigger", default="1m", help="Trigger interval, e.g., '1m', '5m'")
@@ -249,7 +255,7 @@ async def main() -> None:
             await reporter.start()
 
         start_time = args.start or dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=24)
-        await runtime.execute(start=start_time)
+        await runtime.execute(start=start_time, end=args.end)
     except KeyboardInterrupt:
         print("\nShutting down...")
     finally:
