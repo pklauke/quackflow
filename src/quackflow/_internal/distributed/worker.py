@@ -19,7 +19,11 @@ from quackflow._internal.transport import (
     RemoteDownstreamHandle,
     RemoteUpstreamHandle,
 )
-from quackflow._internal.worker_utils import compute_max_window_size, create_task
+from quackflow._internal.worker_utils import (
+    compute_max_window_size,
+    compute_max_window_size_per_source,
+    create_task,
+)
 
 if TYPE_CHECKING:
     from quackflow.sink import Sink
@@ -67,6 +71,7 @@ class DistributedWorkerOrchestrator:
         user_dag = self.cluster_config.user_dag
         exec_dag = self.cluster_config.exec_dag
         max_window_size = compute_max_window_size(user_dag)
+        source_window_sizes = compute_max_window_size_per_source(user_dag)
 
         # Create only tasks assigned to this worker, each with its own engine
         for task_id in self.worker_info.task_ids:
@@ -79,6 +84,7 @@ class DistributedWorkerOrchestrator:
                 self.sources,
                 self.sinks,
                 max_window_size,
+                source_window_sizes,
                 num_partitions=exec_dag.num_partitions,
                 propagate_batch=True,
             )

@@ -641,6 +641,69 @@ class TestSeekBehavior:
             f"Expected seek to 09:45, got {source.seek_timestamp}"
         )
 
+    @pytest.mark.asyncio
+    async def test_seek_per_source_based_on_downstream_windows(self):
+        """Each source should seek based on its own downstream window sizes, not global max."""
+        time_notion = EventTimeNotion(column="event_time")
+
+        # Source A: used with 15-minute window
+        batch_a = make_batch(
+            [1],
+            ["alice"],
+            [dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc)],
+        )
+        source_a = FakeSource([batch_a], time_notion)
+
+        # Source B: used with 30-minute window
+        batch_b = make_batch(
+            [2],
+            ["bob"],
+            [dt.datetime(2024, 1, 1, 10, 5, tzinfo=dt.timezone.utc)],
+        )
+        source_b = FakeSource([batch_b], time_notion)
+
+        sink = FakeSink()
+
+        app = Quackflow()
+        app.source("source_a", schema=EventSchema, ts_col="event_time")
+        app.source("source_b", schema=EventSchema, ts_col="event_time")
+        # View using source_a with 15-minute window
+        app.view(
+            "view_a",
+            "SELECT * FROM HOP('source_a', 'event_time', INTERVAL '15 minutes')",
+        )
+        # View using source_b with 30-minute window
+        app.view(
+            "view_b",
+            "SELECT * FROM HOP('source_b', 'event_time', INTERVAL '30 minutes')",
+        )
+        # Output joining both views
+        app.output(
+            "results",
+            """SELECT a.id, a.user_id, a.event_time, a.window_end
+               FROM view_a a JOIN view_b b ON a.window_end = b.window_end""",
+            schema=EventSchema,
+        ).trigger(window=dt.timedelta(minutes=15))
+
+        runtime = Runtime(
+            app,
+            sources={"source_a": source_a, "source_b": source_b},
+            sinks={"results": sink},
+        )
+        await runtime.execute(
+            start=dt.datetime(2024, 1, 1, 10, 0, tzinfo=dt.timezone.utc),
+            end=dt.datetime(2024, 1, 1, 10, 15, tzinfo=dt.timezone.utc),
+        )
+
+        # source_a should seek to 10:00 - 15min = 09:45
+        assert source_a.seek_timestamp == dt.datetime(2024, 1, 1, 9, 45, tzinfo=dt.timezone.utc), (
+            f"source_a: Expected seek to 09:45, got {source_a.seek_timestamp}"
+        )
+        # source_b should seek to 10:00 - 30min = 09:30
+        assert source_b.seek_timestamp == dt.datetime(2024, 1, 1, 9, 30, tzinfo=dt.timezone.utc), (
+            f"source_b: Expected seek to 09:30, got {source_b.seek_timestamp}"
+        )
+
 
 class TestMultiplePartitions:
     @pytest.mark.asyncio

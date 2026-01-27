@@ -39,7 +39,7 @@ def build_pipeline(window: timedelta, trigger: timedelta) -> Quackflow:
             EXTRACT(EPOCH FROM (d.delivery_time - o.order_time)) / 60.0 AS delivery_minutes,
             o.window_start,
             o.window_end
-        FROM HOP('orders', 'order_time', INTERVAL '{window_seconds} seconds') o
+        FROM HOP('orders', 'order_time', INTERVAL '{window_seconds * 2} seconds') o
         JOIN HOP('deliveries', 'delivery_time', INTERVAL '{window_seconds} seconds') d
             ON o.order_id = d.order_id AND o.window_end = d.window_end
         """,

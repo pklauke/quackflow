@@ -8,7 +8,11 @@ from quackflow.app import DAG, SourceDeclaration, ViewDeclaration
 from quackflow._internal.execution import ExecutionDAG
 from quackflow._internal.task import Task
 from quackflow._internal.transport import LocalDownstreamHandle, LocalUpstreamHandle
-from quackflow._internal.worker_utils import compute_max_window_size, create_task
+from quackflow._internal.worker_utils import (
+    compute_max_window_size,
+    compute_max_window_size_per_source,
+    create_task,
+)
 
 if TYPE_CHECKING:
     from quackflow._internal.engine import Engine
@@ -42,6 +46,7 @@ class SingleWorkerOrchestrator:
                 self.engine.create_view(node.name, decl.sql)
 
         max_window_size = compute_max_window_size(self.user_dag)
+        source_window_sizes = compute_max_window_size_per_source(self.user_dag)
 
         for task_config in self.exec_dag.tasks.values():
             task = create_task(
@@ -51,6 +56,7 @@ class SingleWorkerOrchestrator:
                 self.sources,
                 self.sinks,
                 max_window_size,
+                source_window_sizes,
             )
             self.tasks[task_config.task_id] = task
 
