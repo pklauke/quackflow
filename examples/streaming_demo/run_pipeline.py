@@ -13,6 +13,9 @@ import pyarrow as pa
 from quackflow import EventTimeNotion, Quackflow
 from quackflow.connectors.kafka import KafkaSink, KafkaSource
 from quackflow.runtime import Runtime
+from quackflow._internal.distributed.config import ClusterConfig, WorkerInfo, assign_tasks_to_workers
+from quackflow._internal.distributed.worker import DistributedWorkerOrchestrator
+from quackflow._internal.execution import ExecutionDAG
 
 from schemas import DeliverySchema, OrderSchema, RevenueByRegionSchema
 from utils import TimestampAwareJsonDeserializer, TimestampAwareJsonSerializer, parse_duration
@@ -182,7 +185,103 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--debug", action="store_true", help="Enable debug logging for quackflow")
     parser.add_argument("--group-suffix", default="", help="Suffix to add to consumer group IDs")
 
+    # Distributed mode arguments
+    parser.add_argument("--distributed", action="store_true", help="Run in distributed mode")
+    parser.add_argument("--num-workers", type=int, default=2, help="Total number of workers in the cluster")
+    parser.add_argument("--num-partitions", type=int, default=None, help="Number of partitions (default: same as num-workers)")
+    parser.add_argument("--worker-id", type=int, default=0, help="This worker's ID (0 to num-workers-1)")
+    parser.add_argument("--base-port", type=int, default=50051, help="Base port for Flight servers (worker N uses base-port + N)")
+
     return parser.parse_args()
+
+
+async def run_single_worker(
+    app: Quackflow,
+    sources: dict,
+    sinks: dict,
+    args: argparse.Namespace,
+    start_time: dt.datetime,
+    reporter: ProgressReporter | None,
+) -> None:
+    """Run the pipeline in single-worker mode."""
+    runtime = Runtime(app, sources=sources, sinks=sinks)
+
+    print(f"Starting pipeline (window={args.window}, trigger={args.trigger})...")
+    print("Press Ctrl+C to stop\n")
+
+    try:
+        if reporter:
+            await reporter.start()
+        await runtime.execute(start=start_time, end=args.end)
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+    finally:
+        if reporter:
+            await reporter.stop()
+
+
+async def run_distributed(
+    app: Quackflow,
+    sources: dict,
+    sinks: dict,
+    args: argparse.Namespace,
+    start_time: dt.datetime,
+    reporter: ProgressReporter | None,
+) -> None:
+    """Run the pipeline in distributed mode."""
+    num_workers = args.num_workers
+    num_partitions = args.num_partitions or num_workers
+    worker_id = args.worker_id
+    base_port = args.base_port
+
+    if worker_id < 0 or worker_id >= num_workers:
+        raise ValueError(f"worker-id must be between 0 and {num_workers - 1}")
+
+    user_dag = app.compile()
+    exec_dag = ExecutionDAG.from_user_dag(user_dag, num_partitions)
+    task_assignments = assign_tasks_to_workers(exec_dag, num_workers)
+
+    # Build WorkerInfo for all workers
+    workers: dict[str, WorkerInfo] = {}
+    for i in range(num_workers):
+        wid = f"worker_{i}"
+        workers[wid] = WorkerInfo(
+            worker_id=wid,
+            host="localhost",
+            port=base_port + i,
+            task_ids=task_assignments[wid],
+        )
+
+    cluster_config = ClusterConfig(
+        workers=workers,
+        exec_dag=exec_dag,
+        user_dag=user_dag,
+    )
+
+    my_worker_id = f"worker_{worker_id}"
+    worker_info = workers[my_worker_id]
+
+    orchestrator = DistributedWorkerOrchestrator(
+        worker_info=worker_info,
+        cluster_config=cluster_config,
+        sources=sources,
+        sinks=sinks,
+    )
+
+    print(f"Starting distributed worker {worker_id}/{num_workers} on port {worker_info.port}")
+    print(f"Tasks: {worker_info.task_ids}")
+    print(f"Pipeline: window={args.window}, trigger={args.trigger}")
+    print("Press Ctrl+C to stop\n")
+
+    try:
+        if reporter:
+            await reporter.start()
+        await orchestrator.run(start=start_time, end=args.end)
+    except KeyboardInterrupt:
+        print("\nShutting down...")
+    finally:
+        if reporter:
+            await reporter.stop()
 
 
 async def main() -> None:
@@ -239,28 +338,15 @@ async def main() -> None:
     observable_sink = ObservableSink(args.output_mode, kafka_sink, args.verbose)
 
     sources = {"orders": order_source, "deliveries": delivery_source}
+    sinks = {"revenue_by_region": observable_sink}
     reporter = ProgressReporter(sources) if args.verbose else None
 
-    runtime = Runtime(
-        app,
-        sources={"orders": order_source, "deliveries": delivery_source},
-        sinks={"revenue_by_region": observable_sink},
-    )
+    start_time = args.start or dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=24)
 
-    print(f"Starting pipeline (window={args.window}, trigger={args.trigger})...")
-    print("Press Ctrl+C to stop\n")
-
-    try:
-        if reporter:
-            await reporter.start()
-
-        start_time = args.start or dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=24)
-        await runtime.execute(start=start_time, end=args.end)
-    except KeyboardInterrupt:
-        print("\nShutting down...")
-    finally:
-        if reporter:
-            await reporter.stop()
+    if args.distributed:
+        await run_distributed(app, sources, sinks, args, start_time, reporter)
+    else:
+        await run_single_worker(app, sources, sinks, args, start_time, reporter)
 
 
 if __name__ == "__main__":
