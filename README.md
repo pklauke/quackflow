@@ -11,7 +11,7 @@ Quackflow lets you build real-time data pipelines using SQL. Define sources, tra
 - **SQL-native**: Write transformations in SQL, not a custom DSL or verbose builder API
 - **DuckDB-powered**: Fast, embedded analytics engine with zero external dependencies
 - **Automatic windowing**: `HOP()` function handles tumbling and hopping windows
-- **Built-in backpressure**: Watermark-based flow control across the entire DAG
+- **Event-time watermark**: Watermark-based flow control across the entire DAG
 - **Distributed mode**: Scale out with Arrow Flight for inter-worker communication
 
 ## Installation
