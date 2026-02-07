@@ -55,14 +55,20 @@ class DistributedWorkerOrchestrator:
         user_dag = self.cluster_config.user_dag
         engine = Engine()
 
+        # Get upstream node names - these will be tables (receive batches)
+        upstream_node_names = {task_id.split("[")[0] for task_id in task_config.upstream_tasks}
+
         # Create tables and views needed by this task
         for node in user_dag.nodes:
             if node.node_type == "source":
                 decl: SourceDeclaration = node.declaration  # type: ignore
                 engine.create_table(node.name, decl.schema)
             elif node.node_type == "view":
-                decl: ViewDeclaration = node.declaration  # type: ignore
-                engine.create_view(node.name, decl.sql)
+                # Only create as view if it's local to this task (not upstream)
+                # Upstream views become tables created on first batch insert
+                if node.name not in upstream_node_names:
+                    decl: ViewDeclaration = node.declaration  # type: ignore
+                    engine.create_view(node.name, decl.sql)
 
         return engine
 
@@ -158,22 +164,31 @@ class DistributedWorkerOrchestrator:
         # Wait for all workers to be ready
         await self._wait_for_cluster_ready()
 
-        # Initialize tasks
-        for task in self.tasks.values():
-            task.initialize(start)
+        # Start sinks
+        for sink in self.sinks.values():
+            await sink.start()
 
-        source_tasks = [
-            task.run_source(start, end) for task in self.tasks.values() if task.config.node_type == "source"
-        ]
-        await asyncio.gather(*source_tasks)
+        try:
+            # Initialize tasks
+            for task in self.tasks.values():
+                task.initialize(start)
 
-        # Final fire for output tasks
-        for task in self.tasks.values():
-            await task.final_fire()
+            source_tasks = [
+                task.run_source(start, end) for task in self.tasks.values() if task.config.node_type == "source"
+            ]
+            await asyncio.gather(*source_tasks)
 
-        # Cleanup
-        self.client_pool.close()
-        self.flight_server.shutdown()
+            # Final fire for output tasks
+            for task in self.tasks.values():
+                await task.final_fire()
+        finally:
+            # Stop sinks
+            for sink in self.sinks.values():
+                await sink.stop()
+
+            # Cleanup
+            self.client_pool.close()
+            self.flight_server.shutdown()
 
     async def _wait_for_cluster_ready(self) -> None:
         """Wait until all workers are accepting connections."""

@@ -71,6 +71,11 @@ class OutputDeclaration:
         window: dt.timedelta | None = None,
         records: int | None = None,
     ) -> "OutputDeclaration":
+        if records is not None and self.window_sizes:
+            raise ValueError(
+                "Record triggers cannot be used with HOP-based queries. "
+                "Use a window trigger instead."
+            )
         if window is not None:
             window_seconds = int(window.total_seconds())
             if window_seconds <= 0:
@@ -254,7 +259,13 @@ class Quackflow:
                     if min_window is None or window < min_window:
                         min_window = window
 
-            return TriggerConfig(window=min_window, records=DEFAULT_RECORDS_TRIGGER)
+            # Nodes with HOP (window_sizes) should only use window triggers, not record triggers
+            # Record triggers don't make sense for windowed aggregations
+            decl = node.declaration
+            has_hop = isinstance(decl, ViewDeclaration) and len(decl.window_sizes) > 0
+            records_trigger = None if has_hop else DEFAULT_RECORDS_TRIGGER
+
+            return TriggerConfig(window=min_window, records=records_trigger)
 
         # Process outputs first (they have user-defined triggers, no inference needed)
         for node in dag.output_nodes():

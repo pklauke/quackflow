@@ -138,7 +138,7 @@ class Task:
         # In distributed mode, insert received batch into our engine
         if message.batch is not None:
             table_name = upstream_id.split("[")[0]
-            self._ctx.insert(table_name, message.batch)
+            self._ctx.insert_or_create(table_name, message.batch)
 
         old_effective = self.effective_watermark
         self._state.upstream_watermarks[upstream_id] = message.watermark
@@ -206,25 +206,35 @@ class Task:
     async def _fire(self) -> None:
         self._state.records_at_last_fire = self.total_records
 
-        # Set batch window parameters if window trigger is configured
-        target = None
-        if self._trigger_window is not None and self.effective_watermark is not None:
-            target = self._snap_to_window(self.effective_watermark)
-
+        # Set batch window parameters only if window trigger condition is met
+        # (not just configured - we may be firing due to records trigger)
         if self._trigger_window is not None and self._state.last_fired_watermark is not None:
-            batch_start = self._state.last_fired_watermark - self._max_window_size + self._trigger_window
-            batch_end = target if target is not None else self._state.last_fired_watermark + self._trigger_window
-            self._state.last_fired_watermark = batch_end
-            self._ctx.set_batch_start(batch_start)
-            self._ctx.set_batch_end(batch_end)
-            self._ctx.set_window_hop(self._trigger_window)
+            watermark = self.effective_watermark
+            if watermark is not None:
+                target = self._snap_to_window(watermark)
+                if target > self._state.last_fired_watermark:
+                    # Window trigger condition is met, set batch params
+                    batch_start = self._state.last_fired_watermark - self._max_window_size + self._trigger_window
+                    batch_end = target
+                    self._state.last_fired_watermark = batch_end
+                    self._ctx.set_batch_start(batch_start)
+                    self._ctx.set_batch_end(batch_end)
+                    self._ctx.set_window_hop(self._trigger_window)
+                    logger.debug(
+                        "%s: FIRE batch_start=%s batch_end=%s",
+                        self.config.task_id,
+                        _fmt_wm(batch_start),
+                        _fmt_wm(batch_end),
+                    )
 
         if isinstance(self.declaration, OutputDeclaration):
             result = await asyncio.to_thread(self._ctx.query, self.declaration.sql)
+            logger.debug("%s: query returned %d rows", self.config.task_id, result.num_rows)
             await self._emit_by_window(result)
             await self.propagate_expiration()
         elif isinstance(self.declaration, ViewDeclaration):
             result = await asyncio.to_thread(self._ctx.query, self.declaration.sql)
+            logger.debug("%s: query returned %d rows", self.config.task_id, result.num_rows)
             await self._send_downstream(result)
 
     async def _send_downstream(self, batch: pa.RecordBatch) -> None:

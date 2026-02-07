@@ -128,6 +128,9 @@ def create_task(
     if isinstance(declaration, SourceDeclaration):
         # Sources use per-source window size for seek adjustment
         task_max_window = source_window_sizes.get(task_config.node_name, dt.timedelta(0))
+    elif isinstance(declaration, ViewDeclaration):
+        # Views use their own max window size for HOP functions
+        task_max_window = max(declaration.window_sizes, default=dt.timedelta(0))
     elif isinstance(declaration, OutputDeclaration):
         # Outputs use global max for batch window calculation
         task_max_window = max_window_size

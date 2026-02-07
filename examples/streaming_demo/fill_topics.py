@@ -199,23 +199,39 @@ async def produce_continuous(
 
 
 def create_topics_if_needed(bootstrap_servers: str, topics: list[str]) -> None:
-    """Create topics if they don't exist."""
-    from confluent_kafka.admin import AdminClient, NewTopic
+    """Create topics if they don't exist, with infinite retention."""
+    from confluent_kafka.admin import AdminClient, ConfigResource, NewTopic
 
     admin = AdminClient({"bootstrap.servers": bootstrap_servers})
 
     existing = set(admin.list_topics(timeout=10).topics.keys())
-    to_create = [NewTopic(t, num_partitions=1, replication_factor=1) for t in topics if t not in existing]
+    to_create = [
+        NewTopic(t, num_partitions=1, replication_factor=1, config={"retention.ms": "-1"})
+        for t in topics
+        if t not in existing
+    ]
 
     if to_create:
         futures = admin.create_topics(to_create)
         for topic, future in futures.items():
             try:
                 future.result()
-                print(f"Created topic: {topic}")
+                print(f"Created topic: {topic} (infinite retention)")
             except Exception as e:
                 if "already exists" not in str(e):
                     print(f"Warning: Failed to create topic {topic}: {e}")
+
+    # Update existing topics to have infinite retention
+    existing_topics = [t for t in topics if t in existing]
+    if existing_topics:
+        resources = [ConfigResource("TOPIC", t, set_config={"retention.ms": "-1"}) for t in existing_topics]
+        futures = admin.alter_configs(resources)
+        for resource, future in futures.items():
+            try:
+                future.result()
+                print(f"Updated topic retention: {resource.name} (infinite)")
+            except Exception as e:
+                print(f"Warning: Failed to update retention for {resource.name}: {e}")
 
 
 def parse_args() -> argparse.Namespace:

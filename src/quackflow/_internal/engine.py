@@ -1,7 +1,10 @@
 import datetime as dt
+import logging
 
 import duckdb
 import pyarrow as pa
+
+logger = logging.getLogger(__name__)
 
 from quackflow._internal.window import register_window_functions
 from quackflow.schema import Schema
@@ -16,8 +19,17 @@ class EngineContext:
     def insert(self, table_name: str, batch: pa.RecordBatch) -> None:
         self._cursor.execute(f"INSERT INTO {table_name} SELECT * FROM batch")
 
+    def insert_or_create(self, table_name: str, batch: pa.RecordBatch) -> None:
+        """Insert into table, creating it first if it doesn't exist."""
+        self._cursor.execute(f"CREATE TABLE IF NOT EXISTS {table_name} AS SELECT * FROM batch WHERE false")
+        self._cursor.execute(f"INSERT INTO {table_name} SELECT * FROM batch")
+
     def query(self, sql: str) -> pa.RecordBatch:
-        result = self._cursor.execute(sql).fetch_arrow_table()
+        try:
+            result = self._cursor.execute(sql).fetch_arrow_table()
+        except Exception as e:
+            logger.error("DuckDB query failed: %s\nSQL: %s", e, sql[:500])
+            raise
         return pa.RecordBatch.from_pydict(
             {col: result.column(col).combine_chunks() for col in result.column_names},
             schema=result.schema,
