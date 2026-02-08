@@ -67,6 +67,8 @@ class Task:
         self._num_partitions = num_partitions
         self._propagate_batch = propagate_batch
         self._downstream_expirations: dict[str, ExpirationMessage] = {}
+        self._fire_lock = asyncio.Lock()
+        self._end: dt.datetime | None = None
 
         # Extract trigger from declaration
         if declaration._trigger is not None:
@@ -88,9 +90,11 @@ class Task:
     def total_records(self) -> int:
         return sum(self._state.upstream_records.values())
 
-    def initialize(self, start: dt.datetime) -> None:
+    def initialize(self, start: dt.datetime, end: dt.datetime | None = None) -> None:
+        self._end = end
         if self._trigger_window is not None:
-            self._state.last_fired_watermark = self._snap_to_window(start)
+            # Initialize to one trigger window before start so first fire can produce window_end=start
+            self._state.last_fired_watermark = self._snap_to_window(start) - self._trigger_window
 
     async def run_source(self, start: dt.datetime, end: dt.datetime | None) -> None:
         from quackflow.source import ReplayableSource
@@ -146,17 +150,18 @@ class Task:
         new_effective = self.effective_watermark
 
         if new_effective is not None and (old_effective is None or new_effective > old_effective):
-            if isinstance(self.declaration, ViewDeclaration) and not self._propagate_batch:
-                # Single-worker mode: views forward effective watermark (min of all upstreams)
+            if self._propagate_batch or self._sink is not None:
+                # Distributed mode or output: check trigger and fire
+                if self._should_fire():
+                    await self._fire()
+            else:
+                # Single-worker views: forward effective watermark (min of all upstreams)
                 effective_message = WatermarkMessage(
                     watermark=new_effective,
                     num_rows=message.num_rows,
                     batch=message.batch,
                 )
                 await self._forward_watermark(effective_message)
-            elif self._should_fire():
-                # Distributed mode or output: check trigger and fire
-                await self._fire()
 
     async def receive_expiration(self, downstream_id: str, message: ExpirationMessage) -> None:
         logger.debug(
@@ -188,12 +193,10 @@ class Task:
             await self._handle_expiration(combined_message)
 
     def _should_fire(self) -> bool:
-        # Check records trigger
         if self._trigger_records is not None:
             if self.total_records - self._state.records_at_last_fire >= self._trigger_records:
                 return True
 
-        # Check window trigger
         if self._trigger_window is not None:
             watermark = self.effective_watermark
             if watermark is not None and self._state.last_fired_watermark is not None:
@@ -204,38 +207,60 @@ class Task:
         return False
 
     async def _fire(self) -> None:
-        self._state.records_at_last_fire = self.total_records
+        async with self._fire_lock:
+            # Re-check trigger condition after acquiring lock - state may have changed
+            # while waiting for the lock (another fire may have just completed)
+            if not self._should_fire():
+                return
 
-        # Set batch window parameters only if window trigger condition is met
-        # (not just configured - we may be firing due to records trigger)
-        if self._trigger_window is not None and self._state.last_fired_watermark is not None:
-            watermark = self.effective_watermark
-            if watermark is not None:
-                target = self._snap_to_window(watermark)
-                if target > self._state.last_fired_watermark:
-                    # Window trigger condition is met, set batch params
-                    batch_start = self._state.last_fired_watermark - self._max_window_size + self._trigger_window
-                    batch_end = target
-                    self._state.last_fired_watermark = batch_end
-                    self._ctx.set_batch_start(batch_start)
-                    self._ctx.set_batch_end(batch_end)
-                    self._ctx.set_window_hop(self._trigger_window)
-                    logger.debug(
-                        "%s: FIRE batch_start=%s batch_end=%s",
-                        self.config.task_id,
-                        _fmt_wm(batch_start),
-                        _fmt_wm(batch_end),
-                    )
+            # Capture state snapshot before any async operation to avoid races
+            # with receive_watermark() modifying state during the query
+            total_records = self.total_records
+            effective_wm = self.effective_watermark
+            last_fired = self._state.last_fired_watermark
 
-        if isinstance(self.declaration, OutputDeclaration):
-            result = await asyncio.to_thread(self._ctx.query, self.declaration.sql)
+            self._state.records_at_last_fire = total_records
+            target: dt.datetime | None = None
+
+            if self._trigger_window is not None and last_fired is not None:
+                if effective_wm is not None:
+                    target = self._snap_to_window(effective_wm)
+                    # Cap at end time to avoid emitting windows past the requested range
+                    if self._end is not None:
+                        end_snapped = self._snap_to_window(self._end)
+                        target = min(target, end_snapped)
+                    if target > last_fired:
+                        batch_start = last_fired - self._max_window_size + self._trigger_window
+                        logger.debug(
+                            "%s: FIRE batch_start=%s batch_end=%s",
+                            self.config.task_id,
+                            _fmt_wm(batch_start),
+                            _fmt_wm(target),
+                        )
+                        # Use atomic query_with_window to prevent races with inserts
+                        result = await asyncio.to_thread(
+                            self._ctx.query_with_window,
+                            self.declaration.sql,
+                            batch_start,
+                            target,
+                            self._trigger_window,
+                        )
+                    else:
+                        result = await asyncio.to_thread(self._ctx.query, self.declaration.sql)
+            else:
+                result = await asyncio.to_thread(self._ctx.query, self.declaration.sql)
+
             logger.debug("%s: query returned %d rows", self.config.task_id, result.num_rows)
-            await self._emit_by_window(result)
-            await self.propagate_expiration()
-        elif isinstance(self.declaration, ViewDeclaration):
-            result = await asyncio.to_thread(self._ctx.query, self.declaration.sql)
-            logger.debug("%s: query returned %d rows", self.config.task_id, result.num_rows)
-            await self._send_downstream(result)
+
+            if self._sink is not None:
+                await self._emit_by_window(result)
+                if target is not None:
+                    self._state.last_fired_watermark = target
+                await self.propagate_expiration()
+            else:
+                await self._send_downstream(result)
+                if target is not None:
+                    self._state.last_fired_watermark = target
 
     async def _send_downstream(self, batch: pa.RecordBatch) -> None:
         """Send a batch to all downstream handles (used by views after firing)."""
@@ -288,7 +313,7 @@ class Task:
             await self._fire()
 
     async def propagate_expiration(self) -> None:
-        if not isinstance(self.declaration, OutputDeclaration):
+        if self._sink is None:
             return
         if self._state.last_fired_watermark is None:
             return
@@ -309,9 +334,12 @@ class Task:
         if self._sink is None:
             return
 
-        if "window_end" not in result.schema.names or result.num_rows == 0:
-            if result.num_rows > 0:
-                logger.debug("%s: SINK WRITE %d rows", self.config.task_id, result.num_rows)
+        # Skip empty batches
+        if result.num_rows == 0:
+            return
+
+        if "window_end" not in result.schema.names:
+            logger.debug("%s: SINK WRITE %d rows", self.config.task_id, result.num_rows)
             await self._sink.write(result)
             return
 
@@ -359,9 +387,10 @@ class Task:
     async def _handle_expiration(self, message: ExpirationMessage) -> None:
         if self.config.node_type == "source":
             # Sources use the received threshold directly
-            if isinstance(self.declaration, SourceDeclaration) and self.declaration.ts_col:
+            ts_col = getattr(self.declaration, "ts_col", None)
+            if ts_col:
                 logger.debug("%s: DELETE data before %s", self.config.task_id, _fmt_wm(message.threshold))
-                self._ctx.delete_before(self.config.node_name, self.declaration.ts_col, message.threshold)
+                self._ctx.delete_before(self.config.node_name, ts_col, message.threshold)
         else:
             # Compute this node's threshold from the reference point (avoids compounding)
             window_sizes = getattr(self.declaration, "window_sizes", [])

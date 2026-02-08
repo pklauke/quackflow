@@ -171,7 +171,7 @@ class DistributedWorkerOrchestrator:
         try:
             # Initialize tasks
             for task in self.tasks.values():
-                task.initialize(start)
+                task.initialize(start, end)
 
             source_tasks = [
                 task.run_source(start, end) for task in self.tasks.values() if task.config.node_type == "source"

@@ -40,8 +40,6 @@ def build_pipeline(window: timedelta, trigger: timedelta) -> Quackflow:
             o.order_time,
             d.delivery_time,
             EXTRACT(EPOCH FROM (d.delivery_time - o.order_time)) / 60.0 AS delivery_minutes,
-            o.window_start,
-            o.window_end
         FROM HOP('orders', 'order_time', INTERVAL '{window_seconds * 2} seconds') o
         JOIN HOP('deliveries', 'delivery_time', INTERVAL '{window_seconds} seconds') d
             ON o.order_id = d.order_id AND o.window_end = d.window_end
@@ -50,7 +48,7 @@ def build_pipeline(window: timedelta, trigger: timedelta) -> Quackflow:
 
     app.output(
         "revenue_by_region",
-        """
+        f"""
         SELECT
             region,
             SUM(amount) AS total_revenue,
@@ -58,7 +56,7 @@ def build_pipeline(window: timedelta, trigger: timedelta) -> Quackflow:
             AVG(delivery_minutes) AS avg_delivery_minutes,
             window_start,
             window_end
-        FROM fulfilled
+        FROM HOP(fulfilled, 'delivery_time', INTERVAL '{window_seconds} seconds')
         GROUP BY region, window_start, window_end
         ORDER BY region
         """,

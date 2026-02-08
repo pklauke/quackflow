@@ -79,6 +79,9 @@ def extract_tables(sql: str) -> set[str]:
             first_arg = func.expressions[0]
             if isinstance(first_arg, exp.Literal) and first_arg.is_string:
                 tables.add(first_arg.this)
+            elif isinstance(first_arg, exp.Column):
+                # Handle HOP(table_name, ...) where table_name is an identifier
+                tables.add(first_arg.name)
 
     return tables
 

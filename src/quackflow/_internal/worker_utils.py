@@ -132,8 +132,10 @@ def create_task(
         # Views use their own max window size for HOP functions
         task_max_window = max(declaration.window_sizes, default=dt.timedelta(0))
     elif isinstance(declaration, OutputDeclaration):
-        # Outputs use global max for batch window calculation
-        task_max_window = max_window_size
+        # Outputs use their own window sizes if they have HOP,
+        # otherwise use global max (for outputs that reference views with HOP)
+        own_max = max(declaration.window_sizes, default=dt.timedelta(0))
+        task_max_window = own_max if own_max > dt.timedelta(0) else max_window_size
     else:
         task_max_window = dt.timedelta(0)
 
