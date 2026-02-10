@@ -30,6 +30,11 @@ class TeamScoreSchema(Schema):
     total = Int()
 
 
+class WindowedCountSchema(Schema):
+    cnt = Int()
+    window_end = Timestamp()
+
+
 # Base date for timestamps
 BASE = dt.datetime(2024, 1, 1, 12, 0, 0, tzinfo=dt.timezone.utc)
 
@@ -70,9 +75,13 @@ def team_red_data():
     )
 
 
+_next_base_port = 50051
+
+
 @pytest.fixture
 def run_cluster(time_notion):
     """Fixture that provides a helper to run a distributed cluster."""
+    global _next_base_port
     clusters: list[DistributedCluster] = []
 
     def _run(
@@ -84,8 +93,12 @@ def run_cluster(time_notion):
         debug: bool = True,
     ) -> list[pa.RecordBatch]:
         """Run cluster and return collected sink results."""
+        global _next_base_port
         sources = {pid: {"scores": FakeSource(batches, time_notion)} for pid, batches in batches_by_partition.items()}
         sinks = {pid: {"results": FakeSink()} for pid in batches_by_partition}
+
+        base_port = _next_base_port
+        _next_base_port += num_workers
 
         cluster = launch_distributed_cluster(
             app=app,
@@ -94,6 +107,7 @@ def run_cluster(time_notion):
             num_workers=num_workers,
             start=start,
             end=end,
+            base_port=base_port,
             debug=debug,
         )
         clusters.append(cluster)
