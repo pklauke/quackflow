@@ -164,7 +164,7 @@ class TestRead:
             bootstrap_servers="localhost:9092",
             group_id="test-group",
             schema=TestSchema,
-            poll_timeout=0.01,
+            timeout=0.01,
             _consumer=consumer,
         )
 

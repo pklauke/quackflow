@@ -121,6 +121,15 @@ class FakeKafkaConsumer:
         self._index += 1
         return msg
 
+    def consume(self, num_messages: int = 1, timeout: float = 1.0) -> list[FakeKafkaMessage]:
+        result = []
+        for _ in range(num_messages):
+            if self._index >= len(self._messages):
+                break
+            result.append(self._messages[self._index])
+            self._index += 1
+        return result
+
     def close(self) -> None:
         self._closed = True
 

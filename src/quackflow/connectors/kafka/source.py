@@ -27,11 +27,10 @@ class KafkaSource:
         bootstrap_servers: str,
         group_id: str,
         schema: type[Schema],
-        auto_offset_reset: str = "earliest",
-        poll_timeout: float = 1.0,
-        batch_size: int = 1000,
         value_deserializer: Deserializer | None = None,
         key_deserializer: Deserializer | None = None,
+        timeout: float = 1.0,
+        batch_size: int = 1000,
         consumer_config: dict[str, Any] | None = None,
         _consumer: Any = None,
     ):
@@ -44,11 +43,10 @@ class KafkaSource:
         self._bootstrap_servers = bootstrap_servers
         self._group_id = group_id
         self._schema = schema
-        self._auto_offset_reset = auto_offset_reset
-        self._poll_timeout = poll_timeout
-        self._batch_size = batch_size
         self._value_deserializer = value_deserializer or JsonDeserializer()
         self._key_deserializer = key_deserializer
+        self._timeout = timeout
+        self._batch_size = batch_size
         self._consumer_config = consumer_config or {}
         self._watermark: dt.datetime | None = None
         self._consumer = _consumer
@@ -71,7 +69,7 @@ class KafkaSource:
             config = {
                 "bootstrap.servers": self._bootstrap_servers,
                 "group.id": self._group_id,
-                "auto.offset.reset": self._auto_offset_reset,
+                "auto.offset.reset": "earliest",
                 **self._consumer_config,
             }
             self._consumer = Consumer(config)
@@ -79,12 +77,12 @@ class KafkaSource:
         await asyncio.to_thread(self._consumer.subscribe, [self._topic])
 
     async def read(self) -> pa.RecordBatch:
-        messages: list[dict[str, Any]] = []
+        raw_messages = await asyncio.to_thread(
+            self._consumer.consume, self._batch_size, self._timeout
+        )
 
-        for _ in range(self._batch_size):
-            msg = await asyncio.to_thread(self._consumer.poll, self._poll_timeout)
-            if msg is None:
-                break
+        messages: list[dict[str, Any]] = []
+        for msg in raw_messages:
             if msg.error():
                 logger.debug("Kafka message error: %s", msg.error())
                 continue

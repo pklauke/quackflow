@@ -50,8 +50,7 @@ class TestKafkaSourceIntegration:
             group_id=unique_group_id,
             schema=OrderSchema,
             value_deserializer=deserializer,
-            poll_timeout=1.0,
-            batch_size=10,
+            timeout=1.0, batch_size=10,
         )
 
         await source.start()
@@ -129,7 +128,7 @@ class TestKafkaSourceIntegration:
             bootstrap_servers=bootstrap_servers,
             group_id=unique_group_id,
             schema=OrderSchema,
-            poll_timeout=0.5,
+            timeout=0.5,
         )
 
         await source.start()
