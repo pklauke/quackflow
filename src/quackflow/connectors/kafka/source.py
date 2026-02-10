@@ -22,11 +22,11 @@ class KafkaSource:
     def __init__(
         self,
         topic: str,
+        *,
         time_notion: TimeNotion,
         bootstrap_servers: str,
         group_id: str,
         schema: type[Schema],
-        *,
         auto_offset_reset: str = "earliest",
         poll_timeout: float = 1.0,
         batch_size: int = 1000,

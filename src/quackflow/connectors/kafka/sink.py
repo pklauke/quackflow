@@ -16,8 +16,8 @@ class KafkaSink:
     def __init__(
         self,
         topic: str,
-        bootstrap_servers: str,
         *,
+        bootstrap_servers: str,
         value_serializer: Serializer | None = None,
         key_serializer: Serializer | None = None,
         producer_config: dict[str, Any] | None = None,
