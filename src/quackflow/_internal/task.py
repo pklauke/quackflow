@@ -334,7 +334,6 @@ class Task:
         if self._sink is None:
             return
 
-        # Skip empty batches
         if result.num_rows == 0:
             return
 
@@ -386,7 +385,6 @@ class Task:
 
     async def _handle_expiration(self, message: ExpirationMessage) -> None:
         if self.config.node_type == "source":
-            # Sources use the received threshold directly
             ts_col = getattr(self.declaration, "ts_col", None)
             if ts_col:
                 logger.debug("%s: DELETE data before %s", self.config.task_id, _fmt_wm(message.threshold))
