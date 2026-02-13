@@ -1,13 +1,19 @@
 """Worker - physical execution unit that runs multiple tasks."""
 
+import abc
 import asyncio
 import datetime as dt
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from quackflow.app import DAG, SourceDeclaration, ViewDeclaration
-from quackflow._internal.execution import ExecutionDAG
+from quackflow.app import DAG
+from quackflow._internal.execution import ExecutionDAG, TaskConfig
 from quackflow._internal.task import Task
-from quackflow._internal.transport import LocalDownstreamHandle, LocalUpstreamHandle
+from quackflow._internal.transport import (
+    DownstreamHandle,
+    LocalDownstreamHandle,
+    LocalUpstreamHandle,
+    UpstreamHandle,
+)
 from quackflow._internal.worker_utils import (
     compute_max_window_size,
     compute_max_window_size_per_source,
@@ -20,57 +26,96 @@ if TYPE_CHECKING:
     from quackflow.source import Source
 
 
-class SingleWorkerOrchestrator:
+class BaseOrchestrator(abc.ABC):
+    """Base class for single-worker and distributed orchestrators.
+
+    Uses the template method pattern: shared setup/run logic with
+    abstract methods for what differs between deployment modes.
+    """
+
     def __init__(
         self,
         exec_dag: ExecutionDAG,
         user_dag: DAG,
-        engine: "Engine",
         sources: dict[str, "Source"],
         sinks: dict[str, "Sink"],
     ):
         self.exec_dag = exec_dag
         self.user_dag = user_dag
-        self.engine = engine
         self.sources = sources
         self.sinks = sinks
         self.tasks: dict[str, Task] = {}
 
+    # -- Abstract methods (subclasses must implement) --
+
+    @abc.abstractmethod
+    def _get_task_ids(self) -> list[str]:
+        """Return the task IDs this orchestrator is responsible for."""
+
+    @abc.abstractmethod
+    def _get_engine(self, task_config: TaskConfig) -> "Engine":
+        """Return the engine to use for a given task."""
+
+    @abc.abstractmethod
+    def _create_downstream_handle(self, sender_id: str, target_id: str) -> DownstreamHandle:
+        """Create a handle for sending data to a downstream task."""
+
+    @abc.abstractmethod
+    def _create_upstream_handle(self, sender_id: str, target_id: str) -> UpstreamHandle:
+        """Create a handle for sending expiration to an upstream task."""
+
+    # -- Optional hooks (subclasses may override) --
+
+    def _setup_engines(self) -> None:
+        """Called before task creation. Override to set up shared engine state."""
+
+    def _extra_task_kwargs(self) -> dict[str, Any]:
+        """Extra keyword arguments passed to create_task."""
+        return {}
+
+    async def _before_execute(self) -> None:
+        """Called after setup but before executing tasks. Override for startup hooks."""
+
+    async def _cleanup(self) -> None:
+        """Called during finally block after task execution. Override for cleanup."""
+
+    # -- Shared setup/run logic --
+
     def setup(self) -> None:
-        for node in self.user_dag.nodes:
-            if node.node_type == "source":
-                decl: SourceDeclaration = node.declaration  # type: ignore[assignment]
-                self.engine.create_table(node.name, decl.schema)
-            elif node.node_type == "view":
-                decl: ViewDeclaration = node.declaration  # type: ignore[assignment]
-                self.engine.create_view(node.name, decl.sql)
+        self._setup_engines()
 
         max_window_size = compute_max_window_size(self.user_dag)
         source_window_sizes = compute_max_window_size_per_source(self.user_dag)
+        extra_kwargs = self._extra_task_kwargs()
 
-        for task_config in self.exec_dag.tasks.values():
+        for task_id in self._get_task_ids():
+            task_config = self.exec_dag.get_task(task_id)
+            engine = self._get_engine(task_config)
             task = create_task(
                 task_config,
                 self.user_dag,
-                self.engine,
+                engine,
                 self.sources,
                 self.sinks,
                 max_window_size,
                 source_window_sizes,
+                **extra_kwargs,
             )
-            self.tasks[task_config.task_id] = task
+            self.tasks[task_id] = task
 
-        for task_config in self.exec_dag.tasks.values():
-            task = self.tasks[task_config.task_id]
+        for task_id in self._get_task_ids():
+            task_config = self.exec_dag.get_task(task_id)
+            task = self.tasks[task_id]
+
             for downstream_id in task_config.downstream_tasks:
-                downstream_task = self.tasks[downstream_id]
-                task.downstream_handles.append(LocalDownstreamHandle(task.config.task_id, downstream_task))
+                task.downstream_handles.append(self._create_downstream_handle(task_config.task_id, downstream_id))
+
             for upstream_id in task_config.upstream_tasks:
-                upstream_task = self.tasks[upstream_id]
-                task.upstream_handles.append(LocalUpstreamHandle(task.config.task_id, upstream_task))
+                task.upstream_handles.append(self._create_upstream_handle(task_config.task_id, upstream_id))
 
     async def run(self, start: dt.datetime, end: dt.datetime | None) -> None:
         self.setup()
+        await self._before_execute()
 
         for sink in self.sinks.values():
             await sink.start()
@@ -89,3 +134,40 @@ class SingleWorkerOrchestrator:
         finally:
             for sink in self.sinks.values():
                 await sink.stop()
+            await self._cleanup()
+
+
+class SingleWorkerOrchestrator(BaseOrchestrator):
+    def __init__(
+        self,
+        exec_dag: ExecutionDAG,
+        user_dag: DAG,
+        engine: "Engine",
+        sources: dict[str, "Source"],
+        sinks: dict[str, "Sink"],
+    ):
+        super().__init__(exec_dag, user_dag, sources, sinks)
+        self.engine = engine
+
+    def _get_task_ids(self) -> list[str]:
+        return list(self.exec_dag.tasks.keys())
+
+    def _get_engine(self, task_config: TaskConfig) -> "Engine":
+        return self.engine
+
+    def _setup_engines(self) -> None:
+        from quackflow.app import SourceDeclaration, ViewDeclaration
+
+        for node in self.user_dag.nodes:
+            if node.node_type == "source":
+                decl: SourceDeclaration = node.declaration  # type: ignore[assignment]
+                self.engine.create_table(node.name, decl.schema)
+            elif node.node_type == "view":
+                decl: ViewDeclaration = node.declaration  # type: ignore[assignment]
+                self.engine.create_view(node.name, decl.sql)
+
+    def _create_downstream_handle(self, sender_id: str, target_id: str) -> DownstreamHandle:
+        return LocalDownstreamHandle(sender_id, self.tasks[target_id])
+
+    def _create_upstream_handle(self, sender_id: str, target_id: str) -> UpstreamHandle:
+        return LocalUpstreamHandle(sender_id, self.tasks[target_id])
