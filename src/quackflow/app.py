@@ -72,10 +72,7 @@ class OutputDeclaration:
         records: int | None = None,
     ) -> "OutputDeclaration":
         if records is not None and self.window_sizes:
-            raise ValueError(
-                "Record triggers cannot be used with HOP-based queries. "
-                "Use a window trigger instead."
-            )
+            raise ValueError("Record triggers cannot be used with HOP-based queries. Use a window trigger instead.")
         if window is not None:
             window_seconds = int(window.total_seconds())
             if window_seconds <= 0:

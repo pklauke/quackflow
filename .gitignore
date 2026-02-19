@@ -57,4 +57,5 @@ Thumbs.db
 *.duckdb.wal
 DESIGN.md
 CLAUDE.md
+ARCHITECTURE.md
 benchmark.py

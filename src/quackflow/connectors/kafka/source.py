@@ -77,9 +77,7 @@ class KafkaSource:
         await asyncio.to_thread(self._consumer.subscribe, [self._topic])
 
     async def read(self) -> pa.RecordBatch:
-        raw_messages = await asyncio.to_thread(
-            self._consumer.consume, self._batch_size, self._timeout
-        )
+        raw_messages = await asyncio.to_thread(self._consumer.consume, self._batch_size, self._timeout)
 
         messages: list[dict[str, Any]] = []
         for msg in raw_messages:
