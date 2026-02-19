@@ -70,13 +70,19 @@ class Task:
         self._fire_lock = asyncio.Lock()
         self._end: dt.datetime | None = None
 
-        # Extract trigger from declaration
         if declaration._trigger is not None:
             self._trigger_window = declaration._trigger.window
             self._trigger_records = declaration._trigger.records
         else:
             self._trigger_window = None
             self._trigger_records = None
+
+        if isinstance(declaration, (ViewDeclaration, OutputDeclaration)):
+            self._sql = declaration.sql
+            self._window_sizes = declaration.window_sizes
+        else:
+            self._sql = None
+            self._window_sizes = []
 
     @property
     def effective_watermark(self) -> dt.datetime | None:
@@ -207,14 +213,12 @@ class Task:
         return False
 
     async def _fire(self) -> None:
+        assert self._sql is not None
+
         async with self._fire_lock:
-            # Re-check trigger condition after acquiring lock - state may have changed
-            # while waiting for the lock (another fire may have just completed)
             if not self._should_fire():
                 return
 
-            # Capture state snapshot before any async operation to avoid races
-            # with receive_watermark() modifying state during the query
             total_records = self.total_records
             effective_wm = self.effective_watermark
             last_fired = self._state.last_fired_watermark
@@ -222,33 +226,30 @@ class Task:
             self._state.records_at_last_fire = total_records
             target: dt.datetime | None = None
 
-            if self._trigger_window is not None and last_fired is not None:
-                if effective_wm is not None:
-                    target = self._snap_to_window(effective_wm)
-                    # Cap at end time to avoid emitting windows past the requested range
-                    if self._end is not None:
-                        end_snapped = self._snap_to_window(self._end)
-                        target = min(target, end_snapped)
-                    if target > last_fired:
-                        batch_start = last_fired - self._max_window_size + self._trigger_window
-                        logger.debug(
-                            "%s: FIRE batch_start=%s batch_end=%s",
-                            self.config.task_id,
-                            _fmt_wm(batch_start),
-                            _fmt_wm(target),
-                        )
-                        # Use atomic query_with_window to prevent races with inserts
-                        result = await asyncio.to_thread(
-                            self._ctx.query_with_window,
-                            self.declaration.sql,
-                            batch_start,
-                            target,
-                            self._trigger_window,
-                        )
-                    else:
-                        result = await asyncio.to_thread(self._ctx.query, self.declaration.sql)
+            if self._trigger_window is not None and last_fired is not None and effective_wm is not None:
+                target = self._snap_to_window(effective_wm)
+                if self._end is not None:
+                    end_snapped = self._snap_to_window(self._end)
+                    target = min(target, end_snapped)
+                if target > last_fired:
+                    batch_start = last_fired - self._max_window_size + self._trigger_window
+                    logger.debug(
+                        "%s: FIRE batch_start=%s batch_end=%s",
+                        self.config.task_id,
+                        _fmt_wm(batch_start),
+                        _fmt_wm(target),
+                    )
+                    result = await asyncio.to_thread(
+                        self._ctx.query_with_window,
+                        self._sql,
+                        batch_start,
+                        target,
+                        self._trigger_window,
+                    )
+                else:
+                    result = await asyncio.to_thread(self._ctx.query, self._sql)
             else:
-                result = await asyncio.to_thread(self._ctx.query, self.declaration.sql)
+                result = await asyncio.to_thread(self._ctx.query, self._sql)
 
             logger.debug("%s: query returned %d rows", self.config.task_id, result.num_rows)
 
@@ -318,8 +319,7 @@ class Task:
         if self._state.last_fired_watermark is None:
             return
 
-        # Compute initial threshold from output's window sizes
-        max_window = max(self.declaration.window_sizes, default=dt.timedelta(0))
+        max_window = max(self._window_sizes, default=dt.timedelta(0))
         threshold = self._state.last_fired_watermark - max_window
 
         message = ExpirationMessage(
@@ -364,6 +364,7 @@ class Task:
                 start_idx = i
 
         if start_idx < len(window_ends):
+            assert current_end is not None
             batch = table.slice(start_idx).to_batches()[0]
             logger.debug(
                 "%s: SINK WRITE window_end=%s (%d rows)",

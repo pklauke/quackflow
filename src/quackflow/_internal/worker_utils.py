@@ -53,12 +53,11 @@ def compute_max_window_size_per_source(user_dag: DAG) -> dict[str, dt.timedelta]
             sources_for_table[table_name] = {table_name}
             return {table_name}
 
-        # For views/outputs, collect sources from all dependencies
         decl = node.declaration
+        assert isinstance(decl, (ViewDeclaration, OutputDeclaration))
         upstream_sources: set[str] = set()
-        if hasattr(decl, "depends_on"):
-            for dep in decl.depends_on:
-                upstream_sources.update(get_upstream_sources(dep, visited))
+        for dep in decl.depends_on:
+            upstream_sources.update(get_upstream_sources(dep, visited))
 
         sources_for_table[table_name] = upstream_sources
         return upstream_sources

@@ -120,12 +120,11 @@ class DistributedWorkerOrchestrator(BaseOrchestrator):
         upstream_node_names = {task_id.split("[")[0] for task_id in task_config.upstream_tasks}
 
         for node in self.user_dag.nodes:
-            if node.node_type == "source":
-                decl: SourceDeclaration = node.declaration  # type: ignore[assignment]
+            decl = node.declaration
+            if isinstance(decl, SourceDeclaration):
                 engine.create_table(node.name, decl.schema)
-            elif node.node_type == "view":
+            elif isinstance(decl, ViewDeclaration):
                 if node.name not in upstream_node_names:
-                    decl: ViewDeclaration = node.declaration  # type: ignore[assignment]
                     engine.create_view(node.name, decl.sql)
 
         return engine

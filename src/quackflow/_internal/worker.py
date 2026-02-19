@@ -159,11 +159,10 @@ class SingleWorkerOrchestrator(BaseOrchestrator):
         from quackflow.app import SourceDeclaration, ViewDeclaration
 
         for node in self.user_dag.nodes:
-            if node.node_type == "source":
-                decl: SourceDeclaration = node.declaration  # type: ignore[assignment]
+            decl = node.declaration
+            if isinstance(decl, SourceDeclaration):
                 self.engine.create_table(node.name, decl.schema)
-            elif node.node_type == "view":
-                decl: ViewDeclaration = node.declaration  # type: ignore[assignment]
+            elif isinstance(decl, ViewDeclaration):
                 self.engine.create_view(node.name, decl.sql)
 
     def _create_downstream_handle(self, sender_id: str, target_id: str) -> DownstreamHandle:
